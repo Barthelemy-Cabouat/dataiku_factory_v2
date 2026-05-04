@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dataiku-mcp"
+version = "0.1.0"
+description = "MCP tool suite for Dataiku DSS integration"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "dataiku-api-client==14.0.0",
+    "mcp",
+    "pydantic>=2.0.0",
+    "python-dotenv",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "black",
+    "ruff",
+]
+
+[project.scripts]
+dataiku-mcp-server = "scripts.mcp_server:main"
+
+[tool.black]
+line-length = 80
+target-version = ['py311']
+
+[tool.ruff]
+line-length = 80
+target-version = "py311"
+select = ["E", "W", "F", "I", "B", "C4", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
