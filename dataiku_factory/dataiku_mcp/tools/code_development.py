@@ -29,27 +29,17 @@ def get_recipe_code(
         recipe = project.get_recipe(recipe_name)
         settings = recipe.get_settings()
         
-        # Get recipe metadata
+        # Get recipe metadata via definition-and-payload (works for all recipe types incl. sql_query)
         try:
-            recipe_definition = recipe.get_definition()
-            recipe_type = recipe_definition.get("type", "unknown")
-            inputs = [inp["ref"] for inp in recipe_definition.get("inputs", [])]
-            outputs = [out["ref"] for out in recipe_definition.get("outputs", [])]
-        except AttributeError:
-            # Fallback for older API versions
-            try:
-                recipe_def_payload = recipe.get_definition_and_payload()
-                payload = recipe_def_payload.get_payload()
-                if isinstance(payload, dict):
-                    recipe_type = payload.get("type", "unknown")
-                else:
-                    recipe_type = "unknown"
-                inputs = []
-                outputs = []
-            except:
-                recipe_type = "unknown"
-                inputs = []
-                outputs = []
+            def_and_payload = recipe.get_definition_and_payload()
+            recipe_type = def_and_payload.type
+            inputs = def_and_payload.get_flat_input_refs()
+            outputs = def_and_payload.get_flat_output_refs()
+        except Exception:
+            def_and_payload = None
+            recipe_type = "unknown"
+            inputs = []
+            outputs = []
         
         recipe_info = {
             "name": recipe_name,
@@ -73,11 +63,16 @@ def get_recipe_code(
             }
             
         elif recipe_type in ["sql", "sql_query", "sparksql", "hive"]:
-            if hasattr(settings, 'get_code'):
-                code = settings.get_code()
-            else:
-                payload = settings.data.get('payload', '')
-                code = payload if isinstance(payload, str) else str(payload)
+            # SQL query recipes store the query as the payload
+            code = ''
+            if def_and_payload is not None:
+                raw = def_and_payload.get_payload()
+                code = raw if isinstance(raw, str) else ''
+            if not code and hasattr(settings, 'get_code'):
+                try:
+                    code = settings.get_code() or ''
+                except Exception:
+                    code = ''
             code_info = {
                 "language": "sql",
                 "line_count": len(code.split('\n')) if code else 0,
@@ -160,10 +155,19 @@ def validate_recipe_syntax(
         recipe = project.get_recipe(recipe_name)
         
         # Get code to validate
+        def_and_payload = recipe.get_definition_and_payload()
+        recipe_type = def_and_payload.type
         if code is None:
-            settings = recipe.get_settings()
-            code = settings.get_code()
-        
+            if recipe_type in ["sql", "sql_query", "sparksql", "hive"]:
+                raw = def_and_payload.get_payload()
+                code = raw if isinstance(raw, str) else ''
+            else:
+                settings = recipe.get_settings()
+                try:
+                    code = settings.get_code() or ''
+                except Exception:
+                    code = ''
+
         if not code or not code.strip():
             return {
                 "status": "ok",
@@ -171,14 +175,6 @@ def validate_recipe_syntax(
                 "message": "No code to validate (empty recipe)",
                 "errors": []
             }
-        
-        try:
-            recipe_definition = recipe.get_definition()
-            recipe_type = recipe_definition.get("type", "unknown")
-        except AttributeError:
-            # Fallback for older API versions
-            recipe_def_payload = recipe.get_definition_and_payload()
-            recipe_type = recipe_def_payload.get_payload().get("type", "unknown")
         validation_results = {
             "recipe_name": recipe_name,
             "recipe_type": recipe_type,
