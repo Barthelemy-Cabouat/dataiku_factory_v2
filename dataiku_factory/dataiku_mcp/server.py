@@ -26,6 +26,7 @@ Provides tools for managing recipes, datasets, and scenarios.
 from dataiku_mcp.tools import recipes, datasets, scenarios
 from dataiku_mcp.tools import advanced_scenarios, code_development, project_exploration
 from dataiku_mcp.tools import environment_config, monitoring_debug, productivity
+from dataiku_mcp.tools import wiki
 
 # Register Recipe Tools
 @mcp.tool()
@@ -667,6 +668,76 @@ def batch_update_objects(
         Dict containing update results
     """
     return productivity.batch_update_objects(project_key, object_type, pattern, updates)
+
+# Register Wiki Tools
+@mcp.tool()
+def list_wiki_articles(project_key: str) -> Dict[str, Any]:
+    """
+    List all wiki articles in a project.
+
+    Args:
+        project_key: The project key
+
+    Returns:
+        Dict with list of articles (id, name) and total count
+    """
+    return wiki.list_articles(project_key)
+
+@mcp.tool()
+def get_wiki_article(project_key: str, article_id: int) -> Dict[str, Any]:
+    """
+    Get the content of a wiki article by id.
+
+    Args:
+        project_key: The project key
+        article_id:  Integer article id (obtain via list_wiki_articles)
+
+    Returns:
+        Dict with article name and body text
+    """
+    return wiki.get_article(project_key, article_id)
+
+@mcp.tool()
+def create_wiki_article(
+    project_key: str,
+    article_name: str,
+    body: str,
+    parent_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Create a new wiki article.
+
+    Args:
+        project_key:  The project key
+        article_name: Title of the new article
+        body:         Markdown / HTML content
+        parent_id:    Optional parent article id for nesting
+
+    Returns:
+        Dict with new article id
+    """
+    return wiki.create_article(project_key, article_name, body, parent_id)
+
+@mcp.tool()
+def update_wiki_article(
+    project_key: str,
+    article_id: int,
+    body: Optional[str] = None,
+    article_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Update an existing wiki article's body and/or title.
+
+    Args:
+        project_key:  The project key
+        article_id:   Integer article id (obtain via list_wiki_articles)
+        body:         New markdown / HTML content (omit to keep existing)
+        article_name: New article title (omit to keep existing)
+
+    Returns:
+        Dict with updated fields
+    """
+    return wiki.update_article(project_key, article_id, body, article_name)
 
 # Add resource for listing projects
 @mcp.resource("projects://")
