@@ -580,19 +580,79 @@ def get_recent_runs(
 @mcp.tool()
 def get_job_details(
     project_key: str,
-    job_id: str
+    job_id: str,
+    log_lines: int = 100,
+    log_from_end: bool = True,
 ) -> Dict[str, Any]:
     """
-    Get detailed job execution information.
-    
+    Get detailed job execution information including per-activity breakdown.
+
     Args:
         project_key: The project key
         job_id: Job identifier
-        
+        log_lines: Number of log lines to include in the response (0 to skip)
+        log_from_end: If True (default), return the last N lines; False for first N
+
     Returns:
-        Dict containing detailed job information
+        Dict containing job summary, per-activity breakdown, and log excerpt
     """
-    return monitoring_debug.get_job_details(project_key, job_id)
+    return monitoring_debug.get_job_details(project_key, job_id, log_lines, log_from_end)
+
+
+@mcp.tool()
+def get_job_log(
+    project_key: str,
+    job_id: str,
+    lines: int = 200,
+    from_end: bool = True,
+    grep_pattern: Optional[str] = None,
+    severity: Optional[str] = None,
+    activity_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Retrieve and filter the log for a specific job.
+
+    Args:
+        project_key: The project key
+        job_id: Job identifier
+        lines: Maximum lines to return after filtering (default 200)
+        from_end: If True (default), return the last N matching lines;
+                  False returns the first N
+        grep_pattern: Case-insensitive substring filter on log lines
+                      (e.g. "ERROR", "gspread", "PERMISSION_DENIED")
+        severity: Keep only lines at this DSS log level:
+                  ERROR, WARNING, INFO, or DEBUG
+        activity_id: Keep only lines for this activity/recipe
+                     (matches "running <id>" and "act.<id>" patterns)
+
+    Returns:
+        Dict with filtered log content and metadata
+    """
+    return monitoring_debug.get_job_log(
+        project_key, job_id, lines, from_end, grep_pattern, severity, activity_id
+    )
+
+
+@mcp.tool()
+def get_job_activities(
+    project_key: str,
+    job_id: str,
+) -> Dict[str, Any]:
+    """
+    Get the per-activity execution breakdown for a job (no log fetching).
+
+    Lighter-weight alternative to get_job_details when you only need the
+    activity list and failure summary.
+
+    Args:
+        project_key: The project key
+        job_id: Job identifier
+
+    Returns:
+        Dict with job state, error message, and ordered activity list
+    """
+    return monitoring_debug.get_job_activities(project_key, job_id)
+
 
 @mcp.tool()
 def cancel_running_jobs(
