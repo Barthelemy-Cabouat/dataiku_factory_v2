@@ -10,6 +10,7 @@ import dataikuapi
 import dataikuapi.dss.project
 import dataikuapi.dss.scenario
 from dataiku_mcp.client import get_client, get_project
+from dataiku_mcp.tools.api_helpers import item_get, scenario_list_item_id
 
 
 def create_scenario(
@@ -131,15 +132,16 @@ def update_scenario(
                 updated_fields.append('active')
             
             if 'definition' in kwargs:
-                # Update the definition (this may not work with all DSS versions)
+                # Update the scenario definition through the scenario handle.
                 try:
-                    current_definition = settings.get_definition()
+                    current_definition = scenario.get_definition()
                     current_definition.update(kwargs['definition'])
-                    settings.set_definition(current_definition)
+                    scenario.set_definition(current_definition)
                     updated_fields.append('definition')
-                except AttributeError:
+                except Exception:
                     # Fallback: direct update of settings data
-                    settings.data.update(kwargs['definition'])
+                    raw = settings.get_raw()
+                    raw.update(kwargs['definition'])
                     updated_fields.append('definition')
             
             if 'step_script' in kwargs:
@@ -637,8 +639,7 @@ def list_scenarios(
             # DSSScenarioListItem has .id property; raw dict access works only for the
             # underlying _data field, so prefer the property.
             scenario_id = getattr(scenario_data, 'id', None)
-            if scenario_id is None and isinstance(scenario_data, dict):
-                scenario_id = scenario_data.get('id') or scenario_data.get('name')
+            scenario_id = scenario_list_item_id(scenario_data) or scenario_id
 
             try:
                 scenario = project.get_scenario(scenario_id)
@@ -647,7 +648,7 @@ def list_scenarios(
 
                 s_type = raw.get('type', 'unknown')
                 s_active = bool(getattr(settings, 'active', raw.get('active', False)))
-                s_name = raw.get('name', scenario_id)
+                s_name = raw.get('name') or item_get(scenario_data, "name", scenario_id)
 
                 # Apply filters
                 if scenario_type and s_type != scenario_type:
@@ -661,7 +662,7 @@ def list_scenarios(
                     "type": s_type,
                     "active": s_active,
                     "description": raw.get('description', ''),
-                    "tags": raw.get('tags', []),
+                    "tags": raw.get('tags', item_get(scenario_data, "tags", [])),
                     "trigger_count": len(getattr(settings, 'raw_triggers', []) or []),
                 })
 

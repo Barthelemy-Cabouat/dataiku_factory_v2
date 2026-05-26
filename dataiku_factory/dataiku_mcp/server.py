@@ -26,7 +26,7 @@ Provides tools for managing recipes, datasets, and scenarios.
 from dataiku_mcp.tools import recipes, datasets, scenarios
 from dataiku_mcp.tools import advanced_scenarios, code_development, project_exploration
 from dataiku_mcp.tools import environment_config, monitoring_debug, productivity
-from dataiku_mcp.tools import wiki
+from dataiku_mcp.tools import notebooks, wiki
 
 # Register Recipe Tools
 @mcp.tool()
@@ -60,7 +60,13 @@ def create_recipe(
 def update_recipe(
     project_key: str,
     recipe_name: str,
-    **kwargs: Any
+    code: Optional[str] = None,
+    description: Optional[str] = None,
+    tags: Optional[List[str]] = None,
+    custom_fields: Optional[Dict[str, Any]] = None,
+    engine_type: Optional[str] = None,
+    container_conf: Optional[Dict[str, Any]] = None,
+    resource_settings: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Update an existing recipe.
@@ -68,12 +74,28 @@ def update_recipe(
     Args:
         project_key: The project key
         recipe_name: Name of the recipe to update
-        **kwargs: Recipe settings to update
+        code: New code content for code recipes
+        description: Updated recipe description
+        tags: Updated recipe tags
+        custom_fields: Updated custom metadata fields
+        engine_type: Updated engine selection
+        container_conf: Updated container configuration
+        resource_settings: Updated resource settings
         
     Returns:
         Dict containing update result
     """
-    return recipes.update_recipe(project_key, recipe_name, **kwargs)
+    return recipes.update_recipe(
+        project_key,
+        recipe_name,
+        code=code,
+        description=description,
+        tags=tags,
+        custom_fields=custom_fields,
+        engine_type=engine_type,
+        container_conf=container_conf,
+        resource_settings=resource_settings,
+    )
 
 @mcp.tool()
 def delete_recipe(
@@ -738,6 +760,305 @@ def update_wiki_article(
         Dict with updated fields
     """
     return wiki.update_article(project_key, article_id, body, article_name)
+
+# Register Notebook Tools
+@mcp.tool()
+def list_jupyter_notebooks(
+    project_key: str,
+    active: bool = False,
+) -> Dict[str, Any]:
+    """
+    List Jupyter notebooks in a Dataiku project.
+
+    Args:
+        project_key: The project key
+        active: If true, only list currently running notebooks
+
+    Returns:
+        Dict with notebook summaries and total count
+    """
+    return notebooks.list_jupyter_notebooks(project_key, active)
+
+@mcp.tool()
+def get_jupyter_notebook(
+    project_key: str,
+    notebook_name: str,
+    include_outputs: bool = True,
+) -> Dict[str, Any]:
+    """
+    Get the full content of a Jupyter notebook.
+
+    Args:
+        project_key: The project key
+        notebook_name: Name of the notebook
+        include_outputs: Whether to include cell outputs
+
+    Returns:
+        Dict with raw notebook content
+    """
+    return notebooks.get_jupyter_notebook(project_key, notebook_name, include_outputs)
+
+@mcp.tool()
+def create_jupyter_notebook(
+    project_key: str,
+    notebook_name: str,
+    notebook_content: Optional[Dict[str, Any]] = None,
+    cells: Optional[List[Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Create a Jupyter notebook from raw notebook JSON or a list of cells.
+
+    Args:
+        project_key: The project key
+        notebook_name: Name of the notebook to create
+        notebook_content: Raw nbformat-compatible notebook content
+        cells: Convenience list of code cells or raw cell dictionaries
+        metadata: Optional notebook metadata when using cells
+
+    Returns:
+        Dict containing creation result
+    """
+    return notebooks.create_jupyter_notebook(
+        project_key, notebook_name, notebook_content, cells, metadata
+    )
+
+@mcp.tool()
+def update_jupyter_notebook(
+    project_key: str,
+    notebook_name: str,
+    notebook_content: Optional[Dict[str, Any]] = None,
+    cells: Optional[List[Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Replace the content of an existing Jupyter notebook.
+
+    Args:
+        project_key: The project key
+        notebook_name: Name of the notebook to update
+        notebook_content: Raw nbformat-compatible notebook content
+        cells: Convenience list of code cells or raw cell dictionaries
+        metadata: Optional notebook metadata when using cells
+
+    Returns:
+        Dict containing update result
+    """
+    return notebooks.update_jupyter_notebook(
+        project_key, notebook_name, notebook_content, cells, metadata
+    )
+
+@mcp.tool()
+def edit_jupyter_notebook_cells(
+    project_key: str,
+    notebook_name: str,
+    operation: str,
+    cells: Optional[List[Any]] = None,
+    index: Optional[int] = None,
+    count: int = 1,
+) -> Dict[str, Any]:
+    """
+    Edit cells in an existing Jupyter notebook without recreating it.
+
+    Args:
+        project_key: The project key
+        notebook_name: Name of the notebook to edit
+        operation: One of append, insert, replace, or delete
+        cells: Cells to append, insert, or replace; strings become code cells
+        index: Zero-based cell index for insert, replace, or delete
+        count: Number of cells to replace or delete
+
+    Returns:
+        Dict containing edit result
+    """
+    return notebooks.edit_jupyter_notebook_cells(
+        project_key, notebook_name, operation, cells, index, count
+    )
+
+@mcp.tool()
+def delete_jupyter_notebook(
+    project_key: str,
+    notebook_name: str,
+) -> Dict[str, Any]:
+    """
+    Delete a Jupyter notebook and stop any active sessions.
+
+    Args:
+        project_key: The project key
+        notebook_name: Name of the notebook to delete
+
+    Returns:
+        Dict containing deletion result
+    """
+    return notebooks.delete_jupyter_notebook(project_key, notebook_name)
+
+@mcp.tool()
+def clear_jupyter_notebook_outputs(
+    project_key: str,
+    notebook_name: str,
+) -> Dict[str, Any]:
+    """
+    Clear outputs from a Jupyter notebook.
+
+    Args:
+        project_key: The project key
+        notebook_name: Name of the notebook
+
+    Returns:
+        Dict containing clear result
+    """
+    return notebooks.clear_jupyter_notebook_outputs(project_key, notebook_name)
+
+@mcp.tool()
+def list_sql_notebooks(project_key: str) -> Dict[str, Any]:
+    """
+    List SQL notebooks in a Dataiku project.
+
+    Args:
+        project_key: The project key
+
+    Returns:
+        Dict with notebook summaries and total count
+    """
+    return notebooks.list_sql_notebooks(project_key)
+
+@mcp.tool()
+def get_sql_notebook(
+    project_key: str,
+    notebook_id: str,
+    include_history: bool = False,
+) -> Dict[str, Any]:
+    """
+    Get the content of a SQL notebook.
+
+    Args:
+        project_key: The project key
+        notebook_id: ID of the SQL notebook
+        include_history: Whether to include raw query run history
+
+    Returns:
+        Dict with raw notebook content
+    """
+    return notebooks.get_sql_notebook(project_key, notebook_id, include_history)
+
+@mcp.tool()
+def create_sql_notebook(
+    project_key: str,
+    notebook_content: Optional[Dict[str, Any]] = None,
+    cells: Optional[List[Any]] = None,
+    connection: Optional[str] = None,
+    language: str = "SQL",
+) -> Dict[str, Any]:
+    """
+    Create a SQL notebook from raw notebook JSON or query cells.
+
+    Args:
+        project_key: The project key
+        notebook_content: Raw Dataiku SQL notebook content
+        cells: Convenience list of SQL strings or raw cell dictionaries
+        connection: Optional DSS connection name
+        language: SQL dialect, such as SQL, HIVE, IMPALA, or SPARKSQL
+
+    Returns:
+        Dict containing creation result
+    """
+    return notebooks.create_sql_notebook(
+        project_key, notebook_content, cells, connection, language
+    )
+
+@mcp.tool()
+def update_sql_notebook(
+    project_key: str,
+    notebook_id: str,
+    notebook_content: Optional[Dict[str, Any]] = None,
+    cells: Optional[List[Any]] = None,
+    connection: Optional[str] = None,
+    language: str = "SQL",
+) -> Dict[str, Any]:
+    """
+    Replace the content of an existing SQL notebook.
+
+    Args:
+        project_key: The project key
+        notebook_id: ID of the SQL notebook
+        notebook_content: Raw Dataiku SQL notebook content
+        cells: Convenience list of SQL strings or raw cell dictionaries
+        connection: Optional DSS connection name
+        language: SQL dialect, such as SQL, HIVE, IMPALA, or SPARKSQL
+
+    Returns:
+        Dict containing update result
+    """
+    return notebooks.update_sql_notebook(
+        project_key, notebook_id, notebook_content, cells, connection, language
+    )
+
+@mcp.tool()
+def edit_sql_notebook_cells(
+    project_key: str,
+    notebook_id: str,
+    operation: str,
+    cells: Optional[List[Any]] = None,
+    index: Optional[int] = None,
+    count: int = 1,
+) -> Dict[str, Any]:
+    """
+    Edit cells in an existing SQL notebook without recreating it.
+
+    Args:
+        project_key: The project key
+        notebook_id: ID of the SQL notebook to edit
+        operation: One of append, insert, replace, or delete
+        cells: Cells to append, insert, or replace; strings become query cells
+        index: Zero-based cell index for insert, replace, or delete
+        count: Number of cells to replace or delete
+
+    Returns:
+        Dict containing edit result
+    """
+    return notebooks.edit_sql_notebook_cells(
+        project_key, notebook_id, operation, cells, index, count
+    )
+
+@mcp.tool()
+def delete_sql_notebook(
+    project_key: str,
+    notebook_id: str,
+) -> Dict[str, Any]:
+    """
+    Delete a SQL notebook.
+
+    Args:
+        project_key: The project key
+        notebook_id: ID of the SQL notebook
+
+    Returns:
+        Dict containing deletion result
+    """
+    return notebooks.delete_sql_notebook(project_key, notebook_id)
+
+@mcp.tool()
+def clear_sql_notebook_history(
+    project_key: str,
+    notebook_id: str,
+    cell_id: Optional[str] = None,
+    num_runs_to_retain: int = 0,
+) -> Dict[str, Any]:
+    """
+    Clear SQL notebook query history.
+
+    Args:
+        project_key: The project key
+        notebook_id: ID of the SQL notebook
+        cell_id: Optional cell ID to clear; omit for all cells
+        num_runs_to_retain: Number of recent runs to retain
+
+    Returns:
+        Dict containing clear result
+    """
+    return notebooks.clear_sql_notebook_history(
+        project_key, notebook_id, cell_id, num_runs_to_retain
+    )
 
 # Add resource for listing projects
 @mcp.resource("projects://")

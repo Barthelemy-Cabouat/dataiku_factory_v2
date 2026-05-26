@@ -9,6 +9,7 @@ import tempfile
 import traceback
 from typing import Dict, Any, List, Optional
 from dataiku_mcp.client import get_client, get_project
+from dataiku_mcp.tools.api_helpers import recipe_io
 
 def get_recipe_code(
     project_key: str,
@@ -342,22 +343,18 @@ def test_recipe_dry_run(
         
         # Get recipe information
         try:
-            recipe_def = recipe.get_definition()
-            inputs = [inp["ref"] for inp in recipe_def["inputs"]]
-            outputs = [out["ref"] for out in recipe_def["outputs"]]
-            recipe_type = recipe_def.get("type", "unknown")
-        except AttributeError:
-            # Fallback for older API versions
+            def_and_payload = recipe.get_definition_and_payload()
+            refs = recipe_io(recipe)
+            inputs = refs["inputs"]
+            outputs = refs["outputs"]
+            recipe_type = def_and_payload.type
+        except Exception:
             try:
                 recipe_def_payload = recipe.get_definition_and_payload()
-                payload = recipe_def_payload.get_payload()
-                if isinstance(payload, dict):
-                    recipe_type = payload.get("type", "unknown")
-                else:
-                    recipe_type = "unknown"
+                recipe_type = recipe_def_payload.type
                 inputs = []
                 outputs = []
-            except:
+            except Exception:
                 recipe_type = "unknown"
                 inputs = []
                 outputs = []
@@ -378,13 +375,14 @@ def test_recipe_dry_run(
                 
                 # Try to get sample data
                 try:
-                    sample_df = input_dataset.get_dataframe(limit=sample_rows)
+                    import itertools
+                    sample_rows_list = list(itertools.islice(input_dataset.iter_rows(), sample_rows))
                     input_info = {
                         "name": input_name,
                         "status": "ok",
                         "schema_columns": len(schema["columns"]),
-                        "sample_rows": len(sample_df),
-                        "sample_columns": list(sample_df.columns) if hasattr(sample_df, 'columns') else []
+                        "sample_rows": len(sample_rows_list),
+                        "sample_columns": [col.get("name") for col in schema.get("columns", [])]
                     }
                 except Exception as e:
                     input_info = {
