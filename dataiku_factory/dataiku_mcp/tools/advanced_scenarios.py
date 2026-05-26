@@ -41,7 +41,7 @@ def get_scenario_logs(
         # Find the target run
         target_run = None
         if run_id:
-            target_run = next((run for run in runs if run.run_id == run_id), None)
+            target_run = next((run for run in runs if run.id == run_id), None)
             if not target_run:
                 return {
                     "status": "error",
@@ -53,12 +53,12 @@ def get_scenario_logs(
         
         # Extract run information
         run_info = {
-            "run_id": target_run.run_id,
-            "start_time": target_run.start_time,
-            "end_time": target_run.end_time,
+            "run_id": target_run.id,
+            "start_time": target_run.start_time.isoformat() if target_run.start_time else None,
+            "end_time": target_run.end_time.isoformat() if target_run.end_time else None,
             "outcome": target_run.outcome,
             "duration": target_run.duration,
-            "trigger": target_run.trigger_type if hasattr(target_run, 'trigger_type') else "unknown"
+            "trigger": target_run.trigger
         }
         
         # Get logs from the run
@@ -82,17 +82,19 @@ def get_scenario_logs(
         
         # Get step logs if available
         try:
-            step_runs = target_run.get_step_runs()
+            details = target_run.get_details()
+            step_runs = details.steps
             for i, step_run in enumerate(step_runs):
                 try:
-                    step_log = step_run.get_log()
+                    step_id = step_run.get("stepId") or step_run.get("stepRunId") or step_run.get("runId")
+                    step_log = target_run.get_log(step_id=step_id) if step_id else ""
                     if step_log:
                         logs.append({
                             "type": "step_log",
                             "step_index": i,
-                            "step_name": step_run.step_name if hasattr(step_run, 'step_name') else f"Step {i}",
+                            "step_name": step_run.get("stepName") or step_run.get("name") or f"Step {i}",
                             "content": step_log,
-                            "timestamp": step_run.start_time if hasattr(step_run, 'start_time') else target_run.start_time
+                            "timestamp": run_info["start_time"]
                         })
                 except Exception as e:
                     logs.append({
@@ -108,32 +110,39 @@ def get_scenario_logs(
                 "timestamp": target_run.start_time
             })
         
-        # Get job logs if available
+        # Get job logs if available through run details.
         try:
-            jobs = target_run.get_jobs()
-            for job in jobs:
+            details = target_run.get_details()
+            job_ids = []
+            for step in details.steps:
                 try:
+                    job_ids.extend(step.job_ids)
+                except Exception:
+                    pass
+            for job_id in job_ids:
+                try:
+                    job = project.get_job(job_id)
                     job_log = job.get_log()
                     if job_log:
                         logs.append({
                             "type": "job_log",
-                            "job_id": job.job_id,
-                            "job_name": job.job_name if hasattr(job, 'job_name') else f"Job {job.job_id}",
+                            "job_id": job_id,
+                            "job_name": f"Job {job_id}",
                             "content": job_log,
-                            "timestamp": job.start_time if hasattr(job, 'start_time') else target_run.start_time
+                            "timestamp": run_info["start_time"]
                         })
                 except Exception as e:
                     logs.append({
                         "type": "job_error",
-                        "job_id": job.job_id,
+                        "job_id": job_id,
                         "content": f"Could not retrieve job log: {str(e)}",
-                        "timestamp": target_run.start_time
+                        "timestamp": run_info["start_time"]
                     })
         except Exception as e:
             logs.append({
                 "type": "error",
                 "content": f"Could not retrieve jobs: {str(e)}",
-                "timestamp": target_run.start_time
+                "timestamp": run_info["start_time"]
             })
         
         return {
@@ -215,10 +224,11 @@ def get_scenario_steps(
             steps.append(step_info)
         
         # Get scenario metadata
+        raw = settings.get_raw()
         scenario_info = {
             "id": scenario_id,
-            "name": settings.name,
-            "type": settings.type,
+            "name": raw.get("name", scenario_id),
+            "type": raw.get("type", "unknown"),
             "active": settings.active,
             "step_count": len(steps)
         }
@@ -264,11 +274,12 @@ def clone_scenario(
         source_metadata = source_scenario.get_metadata()
         
         # Create new scenario
-        scenario_type = source_settings.type
+        source_raw = source_settings.get_raw()
+        scenario_type = source_raw.get("type", "step_based")
         new_scenario = project.create_scenario(
             new_scenario_name,
             scenario_type,
-            definition=source_settings.get_definition()
+            definition=source_scenario.get_definition()
         )
         
         # Get new scenario settings to modify
@@ -305,6 +316,7 @@ def clone_scenario(
             if "step_modifications" in modifications:
                 step_mods = modifications["step_modifications"]
                 for step_index, step_changes in step_mods.items():
+                    step_index = int(step_index)
                     if step_index < len(new_settings.raw_steps):
                         step = new_settings.raw_steps[step_index]
                         
@@ -330,6 +342,7 @@ def clone_scenario(
             if "trigger_modifications" in modifications:
                 trigger_mods = modifications["trigger_modifications"]
                 for trigger_index, trigger_changes in trigger_mods.items():
+                    trigger_index = int(trigger_index)
                     if trigger_index < len(new_settings.raw_triggers):
                         trigger = new_settings.raw_triggers[trigger_index]
                         trigger.update(trigger_changes)

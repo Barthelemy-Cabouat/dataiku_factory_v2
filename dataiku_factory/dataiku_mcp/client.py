@@ -3,11 +3,15 @@ Dataiku DSS client wrapper for MCP integration.
 """
 
 import os
+from pathlib import Path
 from typing import Optional
 import dataikuapi
 from dotenv import load_dotenv
 
-# Load environment variables
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+# Load the project-local .env so MCP clients do not depend on cwd.
+load_dotenv(_PROJECT_ROOT / ".env")
 load_dotenv()
 
 _CLIENT_INSTANCE: Optional[dataikuapi.DSSClient] = None

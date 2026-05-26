@@ -1,21 +1,21 @@
 # Dataiku Factory
 
-A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that gives AI coding assistants direct access to [Dataiku DSS](https://www.dataiku.com/). It exposes 34 tools covering recipes, datasets, scenarios, project exploration, monitoring, and more — letting you manage Dataiku workflows through natural language in your AI assistant.
+A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that gives AI coding assistants direct access to [Dataiku DSS](https://www.dataiku.com/). It exposes tools for recipes, datasets, scenarios, project exploration, monitoring, notebooks, and wiki workflows so you can manage Dataiku through natural language.
 
-## Repository structure
+## Repository Structure
 
-```
+```text
 dataiku_factory_v2/
-├── dataiku_factory/          # MCP server for Claude Code
-└── dataiku-copilot-skill/    # MCP server variant for GitHub Copilot Chat
+|- dataiku_factory/          # Canonical MCP server for Claude Code, Codex, and VS Code
+`- dataiku-copilot-skill/    # Older wrapper kept only for reference
 ```
 
-Both folders contain the same MCP implementation. `dataiku-copilot-skill` was adapted for the GitHub Copilot Chat extension format; `dataiku_factory` is the canonical version kept in sync from it.
+Use `dataiku_factory` as the source of truth. `dataiku-copilot-skill` is an older wrapper and may drift out of date.
 
 ## Prerequisites
 
 - Python 3.11+
-- A running Dataiku DSS instance (tested on DSS 14.x)
+- A running Dataiku DSS instance
 - A DSS API key with access to the relevant projects
 
 ## Setup
@@ -38,23 +38,16 @@ Edit `.env`:
 ```env
 DSS_HOST=http://your-dss-instance:10000
 DSS_API_KEY=your-api-key-here
-DSS_INSECURE_TLS=true   # set to true for self-signed certificates
+DSS_INSECURE_TLS=true
 ```
 
-Test the connection:
+Test the entrypoint:
 
 ```bash
-python -c "
-import sys; sys.path.insert(0, '.')
-from dataiku_mcp.client import get_dss_version, list_projects
-print('DSS version:', get_dss_version())
-print('Projects accessible:', len(list_projects()))
-"
+python scripts/mcp_server.py --help
 ```
 
-## Claude Code integration
-
-Register the MCP server with Claude Code:
+## Claude Code Integration
 
 ```bash
 claude mcp add dataiku-factory \
@@ -64,32 +57,57 @@ claude mcp add dataiku-factory \
     -- python scripts/mcp_server.py
 ```
 
-Once registered, Claude Code can manage your Dataiku projects directly from the chat. For example:
+## Codex Integration
 
-> *"Get the flow for project SALES_ANALYTICS and show me all datasets containing 'customer'"*
+Codex can register the same stdio server directly. On Windows:
 
-> *"Extract the code from recipe compute_kpis, fix the bug on line 42, and update it"*
+```powershell
+codex mcp add dataiku-factory -- `
+  C:\Users\Bart\Documents\GitHub\dataiku_factory_v2\dataiku_factory\.venv\Scripts\python.exe `
+  C:\Users\Bart\Documents\GitHub\dataiku_factory_v2\dataiku_factory\scripts\mcp_server.py `
+  --transport stdio
+```
 
-> *"Show me the logs for the last failed run of scenario daily_etl"*
+If you prefer not to rely on the local `.env` file, pass the DSS settings explicitly:
 
-## Available tools
+```powershell
+codex mcp add dataiku-factory `
+  --env DSS_HOST=http://your-dss-instance:10000 `
+  --env DSS_API_KEY=your-api-key-here `
+  --env DSS_INSECURE_TLS=true `
+  -- C:\Users\Bart\Documents\GitHub\dataiku_factory_v2\dataiku_factory\.venv\Scripts\python.exe `
+     C:\Users\Bart\Documents\GitHub\dataiku_factory_v2\dataiku_factory\scripts\mcp_server.py `
+     --transport stdio
+```
 
-| Category | Tools |
-|---|---|
-| Recipes | `create_recipe`, `update_recipe`, `delete_recipe`, `run_recipe` |
-| Datasets | `create_dataset`, `update_dataset`, `delete_dataset`, `build_dataset`, `inspect_dataset_schema`, `check_dataset_metrics` |
-| Scenarios | `create_scenario`, `update_scenario`, `delete_scenario`, `add_scenario_trigger`, `remove_scenario_trigger`, `run_scenario` |
-| Advanced scenarios | `get_scenario_logs`, `get_scenario_steps`, `clone_scenario` |
-| Code development | `get_recipe_code`, `validate_recipe_syntax`, `test_recipe_dry_run` |
-| Project exploration | `get_project_flow`, `search_project_objects`, `get_dataset_sample` |
-| Environment & config | `get_code_environments`, `get_project_variables`, `get_connections` |
-| Monitoring & debug | `get_recent_runs`, `get_job_details`, `cancel_running_jobs` |
-| Productivity | `duplicate_project_structure`, `export_project_config`, `batch_update_objects` |
+Verify the registration:
 
-See [`dataiku_factory/README.md`](dataiku_factory/README.md) for full parameter documentation and usage examples for each tool.
+```powershell
+codex mcp list
+codex mcp get dataiku-factory
+```
+
+## Available Tools
+
+The canonical server in `dataiku_factory` currently registers tool groups for:
+
+- Recipes
+- Datasets
+- Scenarios
+- Advanced scenarios
+- Code development
+- Project exploration
+- Environment and configuration
+- Monitoring and debugging
+- Productivity
+- Wiki
+- Jupyter notebooks
+- SQL notebooks
+
+See [dataiku_factory/README.md](dataiku_factory/README.md) for the detailed catalog and examples.
 
 ## Security
 
-- Store credentials in `.env` or pass them as environment variables — never commit them
-- `.env` is listed in `.gitignore`
-- All operations respect the DSS permissions of the configured API key
+- Store credentials in `.env` or pass them as environment variables; never commit them.
+- All operations respect the DSS permissions of the configured API key.
+- Prefer the canonical `dataiku_factory` config path so dependency drift stays in one place.

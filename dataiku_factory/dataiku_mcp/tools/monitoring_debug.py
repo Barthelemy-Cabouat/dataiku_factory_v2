@@ -6,6 +6,7 @@ import json
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 from dataiku_mcp.client import get_client, get_project
+from dataiku_mcp.tools.api_helpers import item_get, scenario_list_item_id
 
 def get_recent_runs(
     project_key: str,
@@ -34,10 +35,8 @@ def get_recent_runs(
         scenarios = project.list_scenarios()
         for scenario in scenarios:
             try:
-                scenario_id = scenario.id if hasattr(scenario, 'id') else scenario["id"]
-                scenario_name = getattr(scenario, 'name', None)
-                if scenario_name is None and isinstance(scenario, dict):
-                    scenario_name = scenario.get("name", scenario_id)
+                scenario_id = scenario_list_item_id(scenario)
+                scenario_name = item_get(scenario, "name", scenario_id)
                 scenario_obj = project.get_scenario(scenario_id)
                 runs = scenario_obj.get_last_runs(limit=limit)
 

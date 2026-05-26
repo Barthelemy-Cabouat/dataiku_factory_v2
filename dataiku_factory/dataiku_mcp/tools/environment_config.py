@@ -5,6 +5,7 @@ Environment and configuration tools for Dataiku MCP integration.
 import json
 from typing import Dict, Any, List, Optional
 from dataiku_mcp.client import get_client, get_project
+from dataiku_mcp.tools.api_helpers import is_sensitive_name, item_get, recipe_io
 
 def get_code_environments(
     project_key: Optional[str] = None
@@ -150,14 +151,14 @@ def get_project_variables(
         # Process variables to hide sensitive information
         processed_standard = {}
         for key, value in standard_variables.items():
-            if key.lower() in ["password", "secret", "key", "token"]:
+            if is_sensitive_name(key):
                 processed_standard[key] = {"type": type(value).__name__, "value": "***HIDDEN***"}
             else:
                 processed_standard[key] = {"type": type(value).__name__, "value": value}
         
         processed_custom = {}
         for key, value in custom_variables.items():
-            if key.lower() in ["password", "secret", "key", "token"]:
+            if is_sensitive_name(key):
                 processed_custom[key] = {"type": type(value).__name__, "value": "***HIDDEN***"}
             else:
                 processed_custom[key] = {"type": type(value).__name__, "value": value}
@@ -251,9 +252,8 @@ def get_connections(
                     safe_params = {}
                     
                     # Filter out sensitive parameters
-                    sensitive_keys = ["password", "secret", "key", "token", "credentials"]
                     for key, value in params.items():
-                        if any(sensitive in key.lower() for sensitive in sensitive_keys):
+                        if is_sensitive_name(key):
                             safe_params[key] = "***HIDDEN***"
                         else:
                             safe_params[key] = value
@@ -287,7 +287,8 @@ def get_connections(
                 
                 for dataset in datasets:
                     try:
-                        dataset_obj = project.get_dataset(dataset["name"])
+                        dataset_name = item_get(dataset, "name")
+                        dataset_obj = project.get_dataset(dataset_name)
                         dataset_settings = dataset_obj.get_settings()
                         dataset_params = dataset_settings.get_raw().get("params", {})
                         
@@ -299,8 +300,8 @@ def get_connections(
                             }
                         
                         connection_usage[connection_name]["datasets"].append({
-                            "name": dataset["name"],
-                            "type": dataset["type"]
+                            "name": dataset_name,
+                            "type": item_get(dataset, "type")
                         })
                         connection_usage[connection_name]["count"] += 1
                         
@@ -311,12 +312,12 @@ def get_connections(
                 recipes = project.list_recipes()
                 for recipe in recipes:
                     try:
-                        recipe_obj = project.get_recipe(recipe["name"])
-                        recipe_definition = recipe_obj.get_definition()
+                        recipe_name = item_get(recipe, "name")
+                        recipe_obj = project.get_recipe(recipe_name)
+                        refs = recipe_io(recipe_obj)
                         
                         # Check inputs and outputs for connections
-                        for input_def in recipe_definition.get("inputs", []):
-                            input_name = input_def["ref"]
+                        for input_name in refs["inputs"]:
                             try:
                                 input_dataset = project.get_dataset(input_name)
                                 input_settings = input_dataset.get_settings()
@@ -326,13 +327,12 @@ def get_connections(
                                 if connection_name in connection_usage:
                                     if "used_by_recipes" not in connection_usage[connection_name]:
                                         connection_usage[connection_name]["used_by_recipes"] = []
-                                    if recipe["name"] not in connection_usage[connection_name]["used_by_recipes"]:
-                                        connection_usage[connection_name]["used_by_recipes"].append(recipe["name"])
+                                    if recipe_name not in connection_usage[connection_name]["used_by_recipes"]:
+                                        connection_usage[connection_name]["used_by_recipes"].append(recipe_name)
                             except:
                                 continue
                         
-                        for output_def in recipe_definition.get("outputs", []):
-                            output_name = output_def["ref"]
+                        for output_name in refs["outputs"]:
                             try:
                                 output_dataset = project.get_dataset(output_name)
                                 output_settings = output_dataset.get_settings()
@@ -342,8 +342,8 @@ def get_connections(
                                 if connection_name in connection_usage:
                                     if "used_by_recipes" not in connection_usage[connection_name]:
                                         connection_usage[connection_name]["used_by_recipes"] = []
-                                    if recipe["name"] not in connection_usage[connection_name]["used_by_recipes"]:
-                                        connection_usage[connection_name]["used_by_recipes"].append(recipe["name"])
+                                    if recipe_name not in connection_usage[connection_name]["used_by_recipes"]:
+                                        connection_usage[connection_name]["used_by_recipes"].append(recipe_name)
                             except:
                                 continue
                                 
