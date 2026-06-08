@@ -26,6 +26,7 @@ Provides tools for managing recipes, datasets, and scenarios.
 from dataiku_mcp.tools import recipes, datasets, scenarios
 from dataiku_mcp.tools import advanced_scenarios, code_development, project_exploration
 from dataiku_mcp.tools import environment_config, monitoring_debug, productivity
+from dataiku_mcp.tools import flow_zones
 
 # Register Recipe Tools
 @mcp.tool()
@@ -34,20 +35,26 @@ def create_recipe(
     recipe_type: str,
     recipe_name: str,
     inputs: List[str],
-    outputs: List[Dict[str, Any]],
+    outputs: List[Any],
     code: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Create a new recipe in a Dataiku project.
-    
+
+    Supports both code recipes (python, r, sql_script, pyspark, shell, ...) and
+    visual recipes (grouping, join, sync, ...).
+
     Args:
         project_key: The project key
-        recipe_type: Type of recipe (e.g., 'python', 'sql', 'join')
+        recipe_type: Type of recipe (e.g., 'python', 'sql_query', 'join')
         recipe_name: Name for the new recipe
         inputs: List of input dataset names
-        outputs: List of output dataset configurations
-        code: Optional code for the recipe
-        
+        outputs: List of outputs. Each entry is either an existing dataset name
+            (string) or a dict {"name": str, "new": bool, "connection": str,
+            "append": bool}. Use {"new": true, "connection": "..."} to create a new
+            managed output dataset (works for code recipes too).
+        code: Optional code/script for code recipes
+
     Returns:
         Dict containing recipe creation result
     """
@@ -678,6 +685,96 @@ def batch_update_objects(
         Dict containing update results
     """
     return productivity.batch_update_objects(project_key, object_type, pattern, updates)
+
+# Register Flow Zone Tools
+@mcp.tool()
+def create_zone(
+    project_key: str,
+    zone_name: str,
+    color: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Create a new Flow Zone in a project (idempotent on name).
+
+    Args:
+        project_key: The project key
+        zone_name: Name for the new zone
+        color: Optional hex color (e.g. '#2ab1ac')
+
+    Returns:
+        Dict containing the created (or existing) zone
+    """
+    return flow_zones.create_zone(project_key, zone_name, color)
+
+@mcp.tool()
+def list_zones(
+    project_key: str,
+) -> Dict[str, Any]:
+    """
+    List all Flow Zones in a project.
+
+    Args:
+        project_key: The project key
+
+    Returns:
+        Dict containing the list of zones
+    """
+    return flow_zones.list_zones(project_key)
+
+@mcp.tool()
+def move_to_zone(
+    project_key: str,
+    zone: str,
+    items: List[Dict[str, str]],
+) -> Dict[str, Any]:
+    """
+    Move datasets/recipes/folders into a Flow Zone.
+
+    Args:
+        project_key: The project key
+        zone: Zone id or zone name to move items into
+        items: List of {"type": "dataset"|"recipe"|"folder", "name": <object_name>}
+
+    Returns:
+        Dict containing per-item move results
+    """
+    return flow_zones.move_to_zone(project_key, zone, items)
+
+@mcp.tool()
+def get_zone_of_object(
+    project_key: str,
+    object_name: str,
+    object_type: str = "dataset",
+) -> Dict[str, Any]:
+    """
+    Get the Flow Zone an object currently belongs to.
+
+    Args:
+        project_key: The project key
+        object_name: Name of the dataset/recipe/folder
+        object_type: 'dataset' (default), 'recipe', or 'folder'
+
+    Returns:
+        Dict containing the owning zone
+    """
+    return flow_zones.get_zone_of_object(project_key, object_name, object_type)
+
+@mcp.tool()
+def delete_zone(
+    project_key: str,
+    zone: str,
+) -> Dict[str, Any]:
+    """
+    Delete a Flow Zone (its items return to the default zone).
+
+    Args:
+        project_key: The project key
+        zone: Zone id or zone name to delete
+
+    Returns:
+        Dict containing deletion result
+    """
+    return flow_zones.delete_zone(project_key, zone)
 
 # Add resource for listing projects
 @mcp.resource("projects://")
