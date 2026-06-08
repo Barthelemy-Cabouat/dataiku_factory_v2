@@ -281,14 +281,23 @@ def delete_dataset(
     try:
         project = get_project(project_key)
         dataset = project.get_dataset(dataset_name)
-        
-        # Store dataset info before deletion
+
+        # Store dataset info before deletion. `get_type()` is not available on
+        # DSSDataset in all client versions, so look the type up defensively.
+        dataset_type = None
+        try:
+            dataset_type = dataset.get_settings().type
+        except Exception:
+            try:
+                dataset_type = dataset.get_settings().get_raw().get("type")
+            except Exception:
+                dataset_type = None
         dataset_info = {
             "name": dataset_name,
-            "type": dataset.get_type(),
+            "type": dataset_type,
             "id": dataset.id
         }
-        
+
         # Delete the dataset
         dataset.delete(drop_data=drop_data)
         
