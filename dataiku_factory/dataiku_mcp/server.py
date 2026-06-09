@@ -27,6 +27,7 @@ from dataiku_mcp.tools import recipes, datasets, scenarios
 from dataiku_mcp.tools import advanced_scenarios, code_development, project_exploration
 from dataiku_mcp.tools import environment_config, monitoring_debug, productivity
 from dataiku_mcp.tools import notebooks, wiki, flow_zones
+from dataiku_mcp.tools import notebook_execution
 
 # Register Recipe Tools
 @mcp.tool()
@@ -974,6 +975,75 @@ def clear_jupyter_notebook_outputs(
         Dict containing clear result
     """
     return notebooks.clear_jupyter_notebook_outputs(project_key, notebook_name)
+
+@mcp.tool()
+def run_jupyter_notebook(
+    project_key: str,
+    notebook_name: str,
+    kernel_name: Optional[str] = None,
+    timeout_per_cell: int = 300,
+    start_timeout: int = 120,
+    stop_on_error: bool = True,
+    write_outputs: bool = True,
+    max_output_chars: int = 4000,
+) -> Dict[str, Any]:
+    """
+    Execute every code cell of a Jupyter notebook inside DSS and capture outputs.
+
+    Runs the notebook in a real DSS Jupyter kernel (full `dataiku` project
+    context: `dataiku.Dataset`, `SQLExecutor2`, etc.) by driving the Jupyter
+    kernel protocol over the DSS `/jupyter/` proxy. Markdown cells are ignored;
+    code cells run top-to-bottom sharing one kernel. Captured stdout, results,
+    display data and error tracebacks are returned per cell and (by default)
+    written back into the notebook so they are visible in the DSS UI. The kernel
+    session is always shut down afterwards.
+
+    Args:
+        project_key: The project key
+        notebook_name: Name of the Jupyter notebook to run
+        kernel_name: Override the Jupyter kernel spec (defaults to the
+            notebook's own kernelspec, else 'python3')
+        timeout_per_cell: Max seconds to wait for a single cell (default 300)
+        start_timeout: Max seconds to wait for the kernel to start (default 120)
+        stop_on_error: If True (default), stop after the first failing cell and
+            mark the rest as skipped
+        write_outputs: If True (default), persist captured outputs back into the
+            notebook
+        max_output_chars: Truncate each cell's returned text to this many chars
+
+    Returns:
+        Dict with per-cell status/output, counts of executed/failed cells, and
+        whether outputs were written back
+    """
+    return notebook_execution.run_jupyter_notebook(
+        project_key, notebook_name, kernel_name, timeout_per_cell,
+        start_timeout, stop_on_error, write_outputs, max_output_chars,
+    )
+
+@mcp.tool()
+def get_jupyter_notebook_outputs(
+    project_key: str,
+    notebook_name: str,
+    max_output_chars: int = 4000,
+) -> Dict[str, Any]:
+    """
+    Read a Jupyter notebook's stored cell outputs as plain text (no execution).
+
+    Useful for inspecting/debugging the results of a previous run without
+    re-running the notebook. Returns per code-cell stdout/results and any error
+    tracebacks (ANSI colour codes stripped).
+
+    Args:
+        project_key: The project key
+        notebook_name: Name of the Jupyter notebook
+        max_output_chars: Truncate each cell's text to this many chars
+
+    Returns:
+        Dict with per-cell outputs and status
+    """
+    return notebook_execution.get_jupyter_notebook_outputs(
+        project_key, notebook_name, max_output_chars,
+    )
 
 @mcp.tool()
 def list_sql_notebooks(project_key: str) -> Dict[str, Any]:
