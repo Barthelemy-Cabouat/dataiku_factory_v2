@@ -55,6 +55,23 @@ def create_recipe(
         for input_name in inputs:
             builder = builder.with_input(input_name)
         
+        def _add_new_output(b, name, connection):
+            """Attach a new managed output dataset, handling differing builder APIs.
+
+            Code recipes (python/r/sql_script/pyspark/shell/...) use
+            ``with_new_output_dataset(name, connection)`` on CodeRecipeCreator, while
+            single-output visual recipes (grouping/sync/...) use
+            ``with_new_output(name, connection)``.
+            """
+            if hasattr(b, "with_new_output_dataset"):
+                return b.with_new_output_dataset(name, connection)
+            if hasattr(b, "with_new_output"):
+                return b.with_new_output(name, connection)
+            raise AttributeError(
+                f"Recipe type '{recipe_type}' does not support creating new outputs "
+                f"via this builder ({type(b).__name__})"
+            )
+
         # Add outputs
         for output_spec in outputs:
             if isinstance(output_spec, str):
@@ -67,11 +84,11 @@ def create_recipe(
                         "status": "error",
                         "message": "Output specification must include 'name' field"
                     }
-                
+
                 if output_spec.get("new", False):
                     # Create new dataset output
                     connection = output_spec.get("connection", "filesystem_managed")
-                    builder = builder.with_new_output(output_name, connection)
+                    builder = _add_new_output(builder, output_name, connection)
                 else:
                     # Use existing dataset
                     append = output_spec.get("append", False)
@@ -81,18 +98,29 @@ def create_recipe(
                     "status": "error",
                     "message": f"Invalid output specification: {output_spec}"
                 }
-        
+
+        # For code recipes, set the script on the builder before building so the
+        # recipe is created with its code in place.
+        if code and hasattr(builder, "with_script"):
+            builder = builder.with_script(code)
+
         # Build the recipe
         recipe = builder.build()
-        
-        # Set code if provided (for code recipes)
-        if code and recipe_type in ['python', 'r', 'sql', 'pyspark', 'sparkr', 'sparksql']:
-            settings = recipe.get_settings()
-            if hasattr(settings, 'set_code'):
-                settings.set_code(code)
-            else:
-                settings.data['payload'] = code
-            settings.save()
+
+        # Set code if provided. Covers code recipes whose builder lacked with_script
+        # (e.g. sql_query) and re-affirms the payload for the rest.
+        if code:
+            try:
+                def_and_payload = recipe.get_definition_and_payload()
+                def_and_payload.set_payload(code)
+                def_and_payload.save()
+            except Exception:
+                settings = recipe.get_settings()
+                if hasattr(settings, "set_code"):
+                    settings.set_code(code)
+                else:
+                    settings.data["payload"] = code
+                settings.save()
         
         return {
             "status": "ok",
