@@ -12,6 +12,16 @@ import dataikuapi.dss.dataset
 from dataiku_mcp.client import get_client, get_project
 
 
+def _dataset_type(dataset: dataikuapi.dss.dataset.DSSDataset) -> Optional[str]:
+    """Return the dataset type using public client APIs."""
+    try:
+        settings = dataset.get_settings()
+        raw = settings.get_raw() if hasattr(settings, "get_raw") else {}
+        return getattr(settings, "type", None) or raw.get("type")
+    except Exception:
+        return None
+
+
 def create_dataset(
     project_key: str,
     dataset_name: str,
@@ -285,7 +295,7 @@ def delete_dataset(
         # Store dataset info before deletion
         dataset_info = {
             "name": dataset_name,
-            "type": dataset.get_type(),
+            "type": _dataset_type(dataset),
             "id": dataset.id
         }
         
@@ -602,7 +612,7 @@ def get_dataset_info(
         settings = dataset.get_settings()
         
         # Get dataset type and configuration
-        dataset_type = dataset.get_type()
+        dataset_type = _dataset_type(dataset)
         
         return {
             "status": "ok",
@@ -612,7 +622,7 @@ def get_dataset_info(
                 "id": dataset.id,
                 "description": metadata.get("description", ""),
                 "tags": metadata.get("tags", []),
-                "managed": dataset.get_type() == "Managed",
+                "managed": dataset_type == "Managed",
                 "creation_date": metadata.get("creationDate"),
                 "last_modified": metadata.get("lastModifiedDate"),
                 "last_modified_by": metadata.get("lastModifiedBy", {}).get("login"),

@@ -6,6 +6,7 @@ import re
 import json
 from typing import Dict, Any, List, Optional
 from dataiku_mcp.client import get_client, get_project
+from dataiku_mcp.tools.api_helpers import item_get, recipe_io, scenario_list_item_id
 
 def get_project_flow(
     project_key: str
@@ -32,45 +33,45 @@ def get_project_flow(
         
         # Add datasets as nodes
         for dataset in datasets:
+            dataset_name = item_get(dataset, "name")
             dataset_info = {
-                "id": dataset["name"],
-                "name": dataset["name"],
+                "id": dataset_name,
+                "name": dataset_name,
                 "type": "dataset",
-                "dataset_type": dataset["type"],
-                "tags": dataset.get("tags", [])
+                "dataset_type": item_get(dataset, "type"),
+                "tags": item_get(dataset, "tags", [])
             }
             flow_nodes.append(dataset_info)
         
         # Add recipes as nodes and create edges
         for recipe in recipes:
+            recipe_name = item_get(recipe, "name")
             recipe_info = {
-                "id": recipe["name"],
-                "name": recipe["name"],
+                "id": recipe_name,
+                "name": recipe_name,
                 "type": "recipe",
-                "recipe_type": recipe["type"],
-                "tags": recipe.get("tags", [])
+                "recipe_type": item_get(recipe, "type"),
+                "tags": item_get(recipe, "tags", [])
             }
             flow_nodes.append(recipe_info)
             
             # Get recipe details for inputs/outputs
             try:
-                recipe_obj = project.get_recipe(recipe["name"])
-                recipe_def = recipe_obj.get_definition()
+                recipe_obj = project.get_recipe(recipe_name)
+                refs = recipe_io(recipe_obj)
                 
                 # Create edges from inputs to recipe
-                for input_def in recipe_def.get("inputs", []):
-                    input_ref = input_def["ref"]
+                for input_ref in refs["inputs"]:
                     flow_edges.append({
                         "from": input_ref,
-                        "to": recipe["name"],
+                        "to": recipe_name,
                         "type": "input"
                     })
                 
                 # Create edges from recipe to outputs
-                for output_def in recipe_def.get("outputs", []):
-                    output_ref = output_def["ref"]
+                for output_ref in refs["outputs"]:
                     flow_edges.append({
-                        "from": recipe["name"],
+                        "from": recipe_name,
                         "to": output_ref,
                         "type": "output"
                     })
@@ -185,9 +186,9 @@ def search_project_objects(
             matching_datasets = []
             
             for dataset in datasets:
-                name = dataset["name"]
-                description = dataset.get("description", "")
-                tags = dataset.get("tags", [])
+                name = item_get(dataset, "name")
+                description = item_get(dataset, "description", "")
+                tags = item_get(dataset, "tags", [])
                 
                 # Check if matches
                 matches = False
@@ -203,7 +204,7 @@ def search_project_objects(
                 if matches:
                     matching_datasets.append({
                         "name": name,
-                        "type": dataset["type"],
+                        "type": item_get(dataset, "type"),
                         "description": description,
                         "tags": tags,
                         "match_type": "name" if search_term.lower() in name.lower() else "metadata"
@@ -217,9 +218,9 @@ def search_project_objects(
             matching_recipes = []
             
             for recipe in recipes:
-                name = recipe["name"]
-                description = recipe.get("description", "")
-                tags = recipe.get("tags", [])
+                name = item_get(recipe, "name")
+                description = item_get(recipe, "description", "")
+                tags = item_get(recipe, "tags", [])
                 
                 # Check if matches
                 matches = False
@@ -235,7 +236,7 @@ def search_project_objects(
                 if matches:
                     matching_recipes.append({
                         "name": name,
-                        "type": recipe["type"],
+                        "type": item_get(recipe, "type"),
                         "description": description,
                         "tags": tags,
                         "match_type": "name" if search_term.lower() in name.lower() else "metadata"
@@ -249,9 +250,9 @@ def search_project_objects(
             matching_scenarios = []
             
             for scenario in scenarios:
-                name = scenario["name"]
-                description = scenario.get("description", "")
-                tags = scenario.get("tags", [])
+                name = item_get(scenario, "name")
+                description = item_get(scenario, "description", "")
+                tags = item_get(scenario, "tags", [])
                 
                 # Check if matches
                 matches = False
@@ -267,11 +268,11 @@ def search_project_objects(
                 if matches:
                     matching_scenarios.append({
                         "name": name,
-                        "id": scenario["id"],
-                        "type": scenario["type"],
+                        "id": scenario_list_item_id(scenario),
+                        "type": item_get(scenario, "type"),
                         "description": description,
                         "tags": tags,
-                        "active": scenario.get("active", False),
+                        "active": item_get(scenario, "active", False),
                         "match_type": "name" if search_term.lower() in name.lower() else "metadata"
                     })
             

@@ -57,6 +57,36 @@ claude mcp add dataiku-factory \
     -- python scripts/mcp_server.py
 ```
 
+### Codex Integration
+
+Codex can use the same stdio server directly. On Windows:
+
+```powershell
+codex mcp add dataiku-factory -- `
+  C:\path\to\dataiku_factory\.venv\Scripts\python.exe `
+  C:\path\to\dataiku_factory\scripts\mcp_server.py `
+  --transport stdio
+```
+
+If you do not want to depend on `.env`, pass the connection settings explicitly:
+
+```powershell
+codex mcp add dataiku-factory `
+  --env DSS_HOST=https://your-dss-instance.com:10000 `
+  --env DSS_API_KEY=your-api-key-here `
+  --env DSS_INSECURE_TLS=true `
+  -- C:\path\to\dataiku_factory\.venv\Scripts\python.exe `
+     C:\path\to\dataiku_factory\scripts\mcp_server.py `
+     --transport stdio
+```
+
+Verify it with:
+
+```powershell
+codex mcp list
+codex mcp get dataiku-factory
+```
+
 ## 📚 MCP Tool Catalog
 
 ### Core Recipe Management Tools
