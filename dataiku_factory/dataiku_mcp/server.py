@@ -26,7 +26,7 @@ Provides tools for managing recipes, datasets, and scenarios.
 from dataiku_mcp.tools import recipes, datasets, scenarios
 from dataiku_mcp.tools import advanced_scenarios, code_development, project_exploration
 from dataiku_mcp.tools import environment_config, monitoring_debug, productivity
-from dataiku_mcp.tools import notebooks, wiki
+from dataiku_mcp.tools import notebooks, wiki, flow_zones
 
 # Register Recipe Tools
 @mcp.tool()
@@ -35,20 +35,26 @@ def create_recipe(
     recipe_type: str,
     recipe_name: str,
     inputs: List[str],
-    outputs: List[Dict[str, Any]],
+    outputs: List[Any],
     code: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Create a new recipe in a Dataiku project.
-    
+
+    Supports both code recipes (python, r, sql_script, pyspark, shell, ...) and
+    visual recipes (grouping, join, sync, ...).
+
     Args:
         project_key: The project key
-        recipe_type: Type of recipe (e.g., 'python', 'sql', 'join')
+        recipe_type: Type of recipe (e.g., 'python', 'sql_query', 'join')
         recipe_name: Name for the new recipe
         inputs: List of input dataset names
-        outputs: List of output dataset configurations
-        code: Optional code for the recipe
-        
+        outputs: List of outputs. Each entry is either an existing dataset name
+            (string) or a dict {"name": str, "new": bool, "connection": str,
+            "append": bool}. Use {"new": true, "connection": "..."} to create a new
+            managed output dataset.
+        code: Optional code/script for code recipes
+
     Returns:
         Dict containing recipe creation result
     """
@@ -602,19 +608,79 @@ def get_recent_runs(
 @mcp.tool()
 def get_job_details(
     project_key: str,
-    job_id: str
+    job_id: str,
+    log_lines: int = 100,
+    log_from_end: bool = True,
 ) -> Dict[str, Any]:
     """
-    Get detailed job execution information.
-    
+    Get detailed job execution information including per-activity breakdown.
+
     Args:
         project_key: The project key
         job_id: Job identifier
-        
+        log_lines: Number of log lines to include in the response (0 to skip)
+        log_from_end: If True (default), return the last N lines; False for first N
+
     Returns:
-        Dict containing detailed job information
+        Dict containing job summary, per-activity breakdown, and log excerpt
     """
-    return monitoring_debug.get_job_details(project_key, job_id)
+    return monitoring_debug.get_job_details(project_key, job_id, log_lines, log_from_end)
+
+
+@mcp.tool()
+def get_job_log(
+    project_key: str,
+    job_id: str,
+    lines: int = 200,
+    from_end: bool = True,
+    grep_pattern: Optional[str] = None,
+    severity: Optional[str] = None,
+    activity_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Retrieve and filter the log for a specific job.
+
+    Args:
+        project_key: The project key
+        job_id: Job identifier
+        lines: Maximum lines to return after filtering (default 200)
+        from_end: If True (default), return the last N matching lines;
+                  False returns the first N
+        grep_pattern: Case-insensitive substring filter on log lines
+                      (e.g. "ERROR", "gspread", "PERMISSION_DENIED")
+        severity: Keep only lines at this DSS log level:
+                  ERROR, WARNING, INFO, or DEBUG
+        activity_id: Keep only lines for this activity/recipe
+                     (matches "running <id>" and "act.<id>" patterns)
+
+    Returns:
+        Dict with filtered log content and metadata
+    """
+    return monitoring_debug.get_job_log(
+        project_key, job_id, lines, from_end, grep_pattern, severity, activity_id
+    )
+
+
+@mcp.tool()
+def get_job_activities(
+    project_key: str,
+    job_id: str,
+) -> Dict[str, Any]:
+    """
+    Get the per-activity execution breakdown for a job (no log fetching).
+
+    Lighter-weight alternative to get_job_details when you only need the
+    activity list and failure summary.
+
+    Args:
+        project_key: The project key
+        job_id: Job identifier
+
+    Returns:
+        Dict with job state, error message, and ordered activity list
+    """
+    return monitoring_debug.get_job_activities(project_key, job_id)
+
 
 @mcp.tool()
 def cancel_running_jobs(
@@ -1059,6 +1125,96 @@ def clear_sql_notebook_history(
     return notebooks.clear_sql_notebook_history(
         project_key, notebook_id, cell_id, num_runs_to_retain
     )
+
+# Register Flow Zone Tools
+@mcp.tool()
+def create_zone(
+    project_key: str,
+    zone_name: str,
+    color: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Create a new Flow Zone in a project (idempotent on name).
+
+    Args:
+        project_key: The project key
+        zone_name: Name for the new zone
+        color: Optional hex color (e.g. '#2ab1ac')
+
+    Returns:
+        Dict containing the created (or existing) zone
+    """
+    return flow_zones.create_zone(project_key, zone_name, color)
+
+@mcp.tool()
+def list_zones(
+    project_key: str,
+) -> Dict[str, Any]:
+    """
+    List all Flow Zones in a project.
+
+    Args:
+        project_key: The project key
+
+    Returns:
+        Dict containing the list of zones
+    """
+    return flow_zones.list_zones(project_key)
+
+@mcp.tool()
+def move_to_zone(
+    project_key: str,
+    zone: str,
+    items: List[Dict[str, str]],
+) -> Dict[str, Any]:
+    """
+    Move datasets/recipes/folders into a Flow Zone.
+
+    Args:
+        project_key: The project key
+        zone: Zone id or zone name to move items into
+        items: List of {"type": "dataset"|"recipe"|"folder", "name": <object_name>}
+
+    Returns:
+        Dict containing per-item move results
+    """
+    return flow_zones.move_to_zone(project_key, zone, items)
+
+@mcp.tool()
+def get_zone_of_object(
+    project_key: str,
+    object_name: str,
+    object_type: str = "dataset",
+) -> Dict[str, Any]:
+    """
+    Get the Flow Zone an object currently belongs to.
+
+    Args:
+        project_key: The project key
+        object_name: Name of the dataset/recipe/folder
+        object_type: 'dataset' (default), 'recipe', or 'folder'
+
+    Returns:
+        Dict containing the owning zone
+    """
+    return flow_zones.get_zone_of_object(project_key, object_name, object_type)
+
+@mcp.tool()
+def delete_zone(
+    project_key: str,
+    zone: str,
+) -> Dict[str, Any]:
+    """
+    Delete a Flow Zone (its items return to the default zone).
+
+    Args:
+        project_key: The project key
+        zone: Zone id or zone name to delete
+
+    Returns:
+        Dict containing deletion result
+    """
+    return flow_zones.delete_zone(project_key, zone)
 
 # Add resource for listing projects
 @mcp.resource("projects://")

@@ -113,7 +113,7 @@ def list_jupyter_notebooks(
         notebooks_list = []
         for item in items:
             raw = dict(item)
-            # kernelSpec may be absent on some DSS versions; fall back gracefully
+            # kernelSpec may be absent on some DSS versions; fall back to raw dict access
             try:
                 kernel_spec = item.kernel_spec
             except (KeyError, AttributeError):
@@ -389,8 +389,6 @@ def create_sql_notebook(
     try:
         project = get_project(project_key)
         content = _sql_content(notebook_content, cells, connection, language)
-        # DSS API requires projectKey in the request body
-        content["projectKey"] = project_key
         notebook = project.create_sql_notebook(content)
         return {
             "status": "ok",

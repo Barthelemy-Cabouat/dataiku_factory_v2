@@ -3,9 +3,11 @@ Dataiku DSS client wrapper for MCP integration.
 """
 
 import os
+import warnings
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 import dataikuapi
+import requests
 from dotenv import load_dotenv
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -13,6 +15,8 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 # Load the project-local .env so MCP clients do not depend on cwd.
 load_dotenv(_PROJECT_ROOT / ".env")
 load_dotenv()
+
+warnings.filterwarnings("ignore", message="Unverified HTTPS request")
 
 _CLIENT_INSTANCE: Optional[dataikuapi.DSSClient] = None
 
@@ -106,9 +110,66 @@ def list_projects() -> list[str]:
 def get_dss_version() -> str:
     """
     Get the DSS version.
-    
+
     Returns:
         str: DSS version string
     """
     client = get_client()
     return client.get_instance_info()._data.get("dssVersion", "Unknown")
+
+
+def _get_normalized_host() -> str:
+    """Return DSS base URL, normalizing the legacy HTTP :10000 form to HTTPS."""
+    host = os.environ.get("DSS_HOST", "").rstrip("/")
+    if host.startswith("http://") and ":10000" in host:
+        host = "https://" + host[len("http://"):].split(":10000")[0]
+    return host
+
+
+def _rest_session() -> requests.Session:
+    """Return a requests Session pre-configured with DSS credentials."""
+    session = requests.Session()
+    session.auth = (os.environ.get("DSS_API_KEY", ""), "")
+    insecure = os.environ.get("DSS_INSECURE_TLS", "true").lower() == "true"
+    session.verify = not insecure
+    return session
+
+
+def rest_get_json(path: str, params: Optional[Dict[str, Any]] = None) -> Any:
+    """
+    GET a DSS public-API path and return the parsed JSON body.
+
+    Args:
+        path: Path relative to /public/api  (e.g. "/projects/KEY/jobs/")
+        params: Optional query parameters
+
+    Returns:
+        Parsed JSON (dict or list)
+
+    Raises:
+        requests.HTTPError: on non-2xx responses
+    """
+    url = f"{_get_normalized_host()}/public/api{path}"
+    r = _rest_session().get(url, params=params, timeout=30)
+    r.raise_for_status()
+    return r.json()
+
+
+def rest_get_text(path: str, params: Optional[Dict[str, Any]] = None) -> str:
+    """
+    GET a DSS public-API path and return the raw text body.
+
+    Args:
+        path: Path relative to /public/api  (e.g. "/projects/KEY/jobs/ID/log")
+        params: Optional query parameters
+
+    Returns:
+        Response text
+
+    Raises:
+        requests.HTTPError: on non-2xx responses
+    """
+    url = f"{_get_normalized_host()}/public/api{path}"
+    r = _rest_session().get(url, params=params, timeout=120)
+    r.raise_for_status()
+    return r.text
