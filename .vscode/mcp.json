@@ -1,0 +1,12 @@
+{
+  "name": "dataiku-factory",
+  "description": "Dataiku DSS MCP server",
+  "command": "${workspaceFolder}/dataiku_factory/.venv/Scripts/python.exe",
+  "args": [
+    "scripts/mcp_server.py",
+    "--transport",
+    "stdio"
+  ],
+  "cwd": "${workspaceFolder}/dataiku_factory",
+  "transport": "stdio"
+}

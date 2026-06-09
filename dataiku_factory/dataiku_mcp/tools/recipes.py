@@ -12,6 +12,15 @@ import dataikuapi.dss.recipe
 from dataiku_mcp.client import get_client, get_project
 
 
+def _recipe_type(recipe: dataikuapi.dss.recipe.DSSRecipe) -> Optional[str]:
+    """Return the recipe type using public client APIs."""
+    try:
+        definition = recipe.get_definition_and_payload()
+        return getattr(definition, "type", None)
+    except Exception:
+        return None
+
+
 def create_recipe(
     project_key: str,
     recipe_type: str,
@@ -104,7 +113,13 @@ def create_recipe(
 def update_recipe(
     project_key: str,
     recipe_name: str,
-    **kwargs
+    code: Optional[str] = None,
+    description: Optional[str] = None,
+    tags: Optional[List[str]] = None,
+    custom_fields: Optional[Dict[str, Any]] = None,
+    engine_type: Optional[str] = None,
+    container_conf: Optional[Dict[str, Any]] = None,
+    resource_settings: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Update an existing recipe's settings or code.
@@ -112,11 +127,13 @@ def update_recipe(
     Args:
         project_key: The project key containing the recipe
         recipe_name: Name of the recipe to update
-        **kwargs: Update parameters including:
-            - code: New code content (for code recipes)
-            - description: Recipe description
-            - tags: List of tags
-            - custom_fields: Dict of custom metadata fields
+        code: New code content (for code recipes)
+        description: Recipe description
+        tags: List of tags
+        custom_fields: Dict of custom metadata fields
+        engine_type: Updated engine selection
+        container_conf: Updated container configuration
+        resource_settings: Updated execution resource settings
     
     Returns:
         Dict with status and update details or error message
@@ -128,52 +145,52 @@ def update_recipe(
         updated_fields = []
         
         # Update code if provided
-        if 'code' in kwargs:
+        if code is not None:
             def_and_payload = recipe.get_definition_and_payload()
             if def_and_payload.type in ["sql", "sql_query", "sparksql", "hive"]:
                 # SQL query recipes store code as the payload
-                def_and_payload.set_payload(kwargs['code'])
+                def_and_payload.set_payload(code)
                 def_and_payload.save()
             else:
                 settings = recipe.get_settings()
-                settings.set_code(kwargs['code'])
+                settings.set_code(code)
                 settings.save()
             updated_fields.append('code')
         
         # Update metadata if provided
-        if any(key in kwargs for key in ['description', 'tags', 'custom_fields']):
+        if any(value is not None for value in [description, tags, custom_fields]):
             metadata = recipe.get_metadata()
             
-            if 'description' in kwargs:
-                metadata['description'] = kwargs['description']
+            if description is not None:
+                metadata['description'] = description
                 updated_fields.append('description')
             
-            if 'tags' in kwargs:
-                metadata['tags'] = kwargs['tags']
+            if tags is not None:
+                metadata['tags'] = tags
                 updated_fields.append('tags')
             
-            if 'custom_fields' in kwargs:
+            if custom_fields is not None:
                 if 'customFields' not in metadata:
                     metadata['customFields'] = {}
-                metadata['customFields'].update(kwargs['custom_fields'])
+                metadata['customFields'].update(custom_fields)
                 updated_fields.append('custom_fields')
             
             recipe.set_metadata(metadata)
         
         # Handle recipe-specific settings updates
-        if any(key in kwargs for key in ['engine_type', 'container_conf', 'resource_settings']):
+        if any(value is not None for value in [engine_type, container_conf, resource_settings]):
             settings = recipe.get_settings()
             
-            if 'engine_type' in kwargs:
-                settings.set_engine_type(kwargs['engine_type'])
+            if engine_type is not None:
+                settings.set_engine_type(engine_type)
                 updated_fields.append('engine_type')
             
-            if 'container_conf' in kwargs:
-                settings.set_container_conf(kwargs['container_conf'])
+            if container_conf is not None:
+                settings.set_container_conf(container_conf)
                 updated_fields.append('container_conf')
             
-            if 'resource_settings' in kwargs:
-                settings.set_resource_settings(kwargs['resource_settings'])
+            if resource_settings is not None:
+                settings.set_resource_settings(resource_settings)
                 updated_fields.append('resource_settings')
             
             settings.save()
@@ -213,7 +230,7 @@ def delete_recipe(
         # Store recipe info before deletion
         recipe_info = {
             "id": recipe.id,
-            "type": recipe.type,
+            "type": _recipe_type(recipe),
             "name": recipe_name
         }
         
@@ -362,7 +379,7 @@ def get_recipe_info(
             "recipe_info": {
                 "id": recipe.id,
                 "name": recipe_name,
-                "type": recipe.type,
+                "type": _recipe_type(recipe),
                 "description": metadata.get("description", ""),
                 "tags": metadata.get("tags", []),
                 "inputs": [{"name": inp["ref"], "project": inp.get("projectKey", project_key)} for inp in inputs],
