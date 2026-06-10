@@ -28,6 +28,7 @@ from dataiku_mcp.tools import advanced_scenarios, code_development, project_expl
 from dataiku_mcp.tools import environment_config, monitoring_debug, productivity
 from dataiku_mcp.tools import notebooks, wiki, flow_zones
 from dataiku_mcp.tools import notebook_execution
+from dataiku_mcp.tools import discussions
 
 # Register Recipe Tools
 @mcp.tool()
@@ -827,6 +828,102 @@ def update_wiki_article(
         Dict with updated fields
     """
     return wiki.update_article(project_key, article_id, body, article_name)
+
+# Register Discussion Tools
+@mcp.tool()
+def list_object_discussions(
+    project_key: str,
+    object_type: str,
+    object_id: str,
+) -> Dict[str, Any]:
+    """
+    List discussions attached to a DSS object.
+
+    Discussions are conversation threads readable from the object's page in the
+    Flow / object list. Each list entry has id, topic, status, timestamps, and
+    reply count (use get_object_discussion for full messages).
+
+    Args:
+        project_key: The project key
+        object_type: DSS object type. Common values: RECIPE, DATASET, NOTEBOOK,
+                     SQL_NOTEBOOK, MANAGED_FOLDER, SCENARIO, SAVED_MODEL,
+                     STREAMING_ENDPOINT, PROJECT, WIKI.
+        object_id:   Object identifier (recipe/dataset name; project key for PROJECT).
+
+    Returns:
+        Dict with the list of discussion summaries.
+    """
+    return discussions.list_discussions(project_key, object_type, object_id)
+
+@mcp.tool()
+def get_object_discussion(
+    project_key: str,
+    object_type: str,
+    object_id: str,
+    discussion_id: str,
+) -> Dict[str, Any]:
+    """
+    Get one discussion's metadata and all its replies.
+
+    Args:
+        project_key:   The project key
+        object_type:   DSS object type (see list_object_discussions)
+        object_id:     Object identifier
+        discussion_id: Discussion identifier (obtain via list_object_discussions)
+
+    Returns:
+        Dict with topic, status, and the full reply list (author/text/time per reply).
+    """
+    return discussions.get_discussion(project_key, object_type, object_id, discussion_id)
+
+@mcp.tool()
+def create_object_discussion(
+    project_key: str,
+    object_type: str,
+    object_id: str,
+    topic: str,
+    message: str,
+) -> Dict[str, Any]:
+    """
+    Create a new discussion thread on a DSS object.
+
+    Useful for attaching a paragraph-level description / context to recipes,
+    datasets, etc. -- visible from the Flow's right-hand info panel.
+
+    Args:
+        project_key: The project key
+        object_type: DSS object type (see list_object_discussions)
+        object_id:   Object identifier
+        topic:       Short title for the discussion
+        message:     First message (markdown supported)
+
+    Returns:
+        Dict with the new discussion_id.
+    """
+    return discussions.create_discussion(project_key, object_type, object_id, topic, message)
+
+@mcp.tool()
+def reply_to_object_discussion(
+    project_key: str,
+    object_type: str,
+    object_id: str,
+    discussion_id: str,
+    message: str,
+) -> Dict[str, Any]:
+    """
+    Add a reply to an existing discussion thread.
+
+    Args:
+        project_key:   The project key
+        object_type:   DSS object type
+        object_id:     Object identifier
+        discussion_id: Discussion identifier
+        message:       Reply text (markdown supported)
+
+    Returns:
+        Dict with status.
+    """
+    return discussions.reply_to_discussion(project_key, object_type, object_id, discussion_id, message)
 
 # Register Notebook Tools
 @mcp.tool()
