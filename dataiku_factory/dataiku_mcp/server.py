@@ -544,18 +544,27 @@ def get_dataset_sample(
 # Register Environment Configuration Tools
 @mcp.tool()
 def get_code_environments(
-    project_key: Optional[str] = None
+    project_key: Optional[str] = None,
+    scope: str = "project"
 ) -> Dict[str, Any]:
     """
-    List available Python/R environments.
-    
+    List Python/R code environments.
+
+    By default (scope="project"), only this project's code env settings
+    (default Python/R envs, overrides) and the details of those few envs are
+    fetched -- requires project_key. Use scope="instance" for a full
+    admin-level listing of every code env on the instance; this requires
+    admin rights and can be slow or hang on instances with many code envs.
+
     Args:
-        project_key: Project identifier (optional)
-        
+        project_key: Project identifier. Required when scope="project".
+        scope: "project" (default, fast/filtered) or "instance"
+            (full admin-level instance listing).
+
     Returns:
-        Dict containing code environments information
+        Dict containing code environment information
     """
-    return environment_config.get_code_environments(project_key)
+    return environment_config.get_code_environments(project_key, scope)
 
 @mcp.tool()
 def get_project_variables(
@@ -574,18 +583,30 @@ def get_project_variables(
 
 @mcp.tool()
 def get_connections(
-    project_key: Optional[str] = None
+    project_key: Optional[str] = None,
+    scope: str = "project"
 ) -> Dict[str, Any]:
     """
     List available data connections.
-    
+
+    By default (scope="project"), connection names are listed via the
+    lightweight, non-admin /connections/get-names endpoint and, when
+    project_key is given, filtered down to the connections actually used by
+    that project's datasets/recipes (with details for just those). Use
+    scope="instance" for a full admin-level listing of every connection on
+    the instance; this requires admin rights and can be slow or hang on
+    instances with many connections.
+
     Args:
-        project_key: Project identifier (optional)
-        
+        project_key: Project identifier. With scope="project", filters
+            connections down to those used by this project.
+        scope: "project" (default, fast/filtered) or "instance"
+            (full admin-level instance listing).
+
     Returns:
         Dict containing connection information
     """
-    return environment_config.get_connections(project_key)
+    return environment_config.get_connections(project_key, scope)
 
 # Register Monitoring and Debug Tools
 @mcp.tool()
