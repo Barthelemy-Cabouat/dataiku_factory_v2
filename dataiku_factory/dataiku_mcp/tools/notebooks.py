@@ -48,13 +48,23 @@ def _jupyter_content(
     notebook_content: Optional[Dict[str, Any]],
     cells: Optional[List[Any]],
     metadata: Optional[Dict[str, Any]],
+    language: str = "python",
 ) -> Dict[str, Any]:
     if notebook_content is not None:
         return notebook_content
 
+    # DSS requires language info in the notebook metadata
+    meta = dict(metadata) if metadata else {}
+    meta.setdefault("kernelspec", {
+        "display_name": "Python (env DWAS_python)",
+        "language": "python",
+        "name": "python_env_DWAS_python",
+    })
+    meta.setdefault("language_info", {"name": language})
+
     return {
         "cells": [_jupyter_cell(cell) for cell in (cells or [])],
-        "metadata": metadata or {},
+        "metadata": meta,
         "nbformat": 4,
         "nbformat_minor": 5,
     }
@@ -180,11 +190,12 @@ def create_jupyter_notebook(
     notebook_content: Optional[Dict[str, Any]] = None,
     cells: Optional[List[Any]] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    language: str = "python",
 ) -> Dict[str, Any]:
     """Create a Jupyter notebook from raw notebook JSON or a list of cells."""
     try:
         project = get_project(project_key)
-        content = _jupyter_content(notebook_content, cells, metadata)
+        content = _jupyter_content(notebook_content, cells, metadata, language)
         notebook = project.create_jupyter_notebook(notebook_name, content)
         return {
             "status": "ok",
@@ -206,13 +217,14 @@ def update_jupyter_notebook(
     notebook_content: Optional[Dict[str, Any]] = None,
     cells: Optional[List[Any]] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    language: str = "python",
 ) -> Dict[str, Any]:
     """Replace the content of an existing Jupyter notebook."""
     try:
         project = get_project(project_key)
         notebook = project.get_jupyter_notebook(notebook_name)
         content_obj = notebook.get_content()
-        content_obj.content = _jupyter_content(notebook_content, cells, metadata)
+        content_obj.content = _jupyter_content(notebook_content, cells, metadata, language)
         content_obj.save()
         return {
             "status": "ok",
@@ -389,7 +401,11 @@ def create_sql_notebook(
     try:
         project = get_project(project_key)
         content = _sql_content(notebook_content, cells, connection, language)
+<<<<<<< Updated upstream
         # DSS API requires projectKey in the request body
+=======
+        # DSS validates that projectKey in body matches the URL path project key
+>>>>>>> Stashed changes
         content["projectKey"] = project_key
         notebook = project.create_sql_notebook(content)
         return {
@@ -419,7 +435,11 @@ def update_sql_notebook(
         project = get_project(project_key)
         notebook = project.get_sql_notebook(notebook_id)
         content_obj = notebook.get_content()
-        content_obj.content = _sql_content(notebook_content, cells, connection, language)
+        new_content = _sql_content(notebook_content, cells, connection, language)
+        # DSS validates that projectKey and id in body match the URL path values
+        new_content["projectKey"] = project_key
+        new_content["id"] = notebook_id
+        content_obj.content = new_content
         content_obj.save()
         return {
             "status": "ok",
