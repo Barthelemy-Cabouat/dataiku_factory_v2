@@ -1,0 +1,2 @@
+[console_scripts]
+dataiku-mcp-server = scripts.mcp_server:main

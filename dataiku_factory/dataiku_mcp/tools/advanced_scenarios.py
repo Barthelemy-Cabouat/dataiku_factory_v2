@@ -269,17 +269,18 @@ def clone_scenario(
         project = get_project(project_key)
         source_scenario = project.get_scenario(source_scenario_id)
         source_settings = source_scenario.get_settings()
-        
-        # Get source scenario configuration
-        source_metadata = source_scenario.get_metadata()
-        
+
         # Create new scenario
         source_raw = source_settings.get_raw()
         scenario_type = source_raw.get("type", "step_based")
+        # get_definition(with_status=False) avoids runtime-state fields;
+        # ensure 'params' is present as the API requires it.
+        defn = source_scenario.get_definition(with_status=False)
+        defn.setdefault("params", {})
         new_scenario = project.create_scenario(
             new_scenario_name,
             scenario_type,
-            definition=source_scenario.get_definition()
+            definition=defn,
         )
         
         # Get new scenario settings to modify

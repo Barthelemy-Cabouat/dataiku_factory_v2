@@ -382,12 +382,13 @@ def add_scenario_trigger(
         
         if trigger_added:
             settings.save()
-            
+            trigger_idx = len(settings.raw_triggers) - 1
             return {
                 "status": "ok",
                 "scenario_id": scenario_id,
+                "trigger_idx": trigger_idx,
                 "trigger_details": trigger_details,
-                "message": f"Trigger '{trigger_type}' added to scenario '{scenario_id}' successfully"
+                "message": f"Trigger '{trigger_type}' added to scenario '{scenario_id}' at index {trigger_idx}",
             }
         
     except Exception as e:
