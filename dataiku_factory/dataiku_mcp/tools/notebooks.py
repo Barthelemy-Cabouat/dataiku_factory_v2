@@ -401,11 +401,7 @@ def create_sql_notebook(
     try:
         project = get_project(project_key)
         content = _sql_content(notebook_content, cells, connection, language)
-<<<<<<< Updated upstream
-        # DSS API requires projectKey in the request body
-=======
         # DSS validates that projectKey in body matches the URL path project key
->>>>>>> Stashed changes
         content["projectKey"] = project_key
         notebook = project.create_sql_notebook(content)
         return {
