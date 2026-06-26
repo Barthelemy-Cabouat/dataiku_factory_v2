@@ -138,6 +138,28 @@ def create_recipe(
         }
 
 
+def _replace_role_refs(role_map: Dict[str, Any], refs: List[str], output: bool) -> None:
+    """Set the recipe's main-role inputs/outputs to exactly `refs` (in place).
+
+    `role_map` is the live dict returned by ``settings.get_recipe_inputs()`` /
+    ``get_recipe_outputs()`` ({role: {"items": [{"ref": ...}, ...]}}). Only the
+    "main" role (or the single existing role) is replaced; other roles such as a
+    scoring recipe's "model" role are left untouched. Existing items are reused
+    when their ref is unchanged so partition deps / append flags are preserved.
+    """
+    role = "main" if "main" in role_map else (next(iter(role_map)) if role_map else "main")
+    existing = {it.get("ref"): it for it in role_map.get(role, {}).get("items", [])}
+    new_items = []
+    for ref in refs:
+        if ref in existing:
+            new_items.append(existing[ref])
+        elif output:
+            new_items.append({"ref": ref, "appendMode": False})
+        else:
+            new_items.append({"ref": ref, "deps": []})
+    role_map[role] = {"items": new_items}
+
+
 def update_recipe(
     project_key: str,
     recipe_name: str,
@@ -148,30 +170,42 @@ def update_recipe(
     engine_type: Optional[str] = None,
     container_conf: Optional[Dict[str, Any]] = None,
     resource_settings: Optional[Dict[str, Any]] = None,
+    inputs: Optional[List[str]] = None,
+    outputs: Optional[List[str]] = None,
+    payload_json: Optional[Union[Dict[str, Any], str]] = None,
 ) -> Dict[str, Any]:
     """
-    Update an existing recipe's settings or code.
-    
+    Update an existing recipe's settings, code, IO, or visual definition.
+
     Args:
         project_key: The project key containing the recipe
         recipe_name: Name of the recipe to update
-        code: New code content (for code recipes)
+        code: New code content (for code recipes: python, r, sql_*, pyspark, shell, ...)
         description: Recipe description
         tags: List of tags
         custom_fields: Dict of custom metadata fields
         engine_type: Updated engine selection
         container_conf: Updated container configuration
         resource_settings: Updated execution resource settings
-    
+        inputs: If given, set the recipe's main-role INPUT datasets to exactly
+            this list of names (adds new ones, drops omitted ones, keeps order).
+            Other roles (e.g. a scoring recipe's "model") are left untouched.
+        outputs: If given, set the recipe's main-role OUTPUT datasets to exactly
+            this list of names. The datasets must already exist.
+        payload_json: For VISUAL (non-code) recipes — the recipe definition to
+            write (grouping keys, join conditions, prepare-script steps, etc.).
+            Accepts a dict (set via set_json_payload) or a raw JSON string (set
+            via set_payload). Use this where `code` does not apply.
+
     Returns:
         Dict with status and update details or error message
     """
     try:
         project = get_project(project_key)
         recipe = project.get_recipe(recipe_name)
-        
+
         updated_fields = []
-        
+
         # Update code if provided
         if code is not None:
             def_and_payload = recipe.get_definition_and_payload()
@@ -184,52 +218,73 @@ def update_recipe(
                 settings.set_code(code)
                 settings.save()
             updated_fields.append('code')
-        
+
         # Update metadata if provided
         if any(value is not None for value in [description, tags, custom_fields]):
             metadata = recipe.get_metadata()
-            
+
             if description is not None:
                 metadata['description'] = description
                 updated_fields.append('description')
-            
+
             if tags is not None:
                 metadata['tags'] = tags
                 updated_fields.append('tags')
-            
+
             if custom_fields is not None:
                 if 'customFields' not in metadata:
                     metadata['customFields'] = {}
                 metadata['customFields'].update(custom_fields)
                 updated_fields.append('custom_fields')
-            
+
             recipe.set_metadata(metadata)
-        
-        # Handle recipe-specific settings updates
-        if any(value is not None for value in [engine_type, container_conf, resource_settings]):
+
+        # Handle settings-level updates (engine/resources + IO + visual payload).
+        # These all live on the recipe settings object, so fetch once and save
+        # once to avoid one update clobbering another.
+        if any(value is not None for value in [engine_type, container_conf,
+                                               resource_settings, inputs, outputs,
+                                               payload_json]):
             settings = recipe.get_settings()
-            
+
             if engine_type is not None:
                 settings.set_engine_type(engine_type)
                 updated_fields.append('engine_type')
-            
+
             if container_conf is not None:
                 settings.set_container_conf(container_conf)
                 updated_fields.append('container_conf')
-            
+
             if resource_settings is not None:
                 settings.set_resource_settings(resource_settings)
                 updated_fields.append('resource_settings')
-            
+
+            if inputs is not None:
+                _replace_role_refs(settings.get_recipe_inputs(), inputs, output=False)
+                updated_fields.append('inputs')
+
+            if outputs is not None:
+                _replace_role_refs(settings.get_recipe_outputs(), outputs, output=True)
+                updated_fields.append('outputs')
+
+            if payload_json is not None:
+                if isinstance(payload_json, str):
+                    settings.set_payload(payload_json)
+                else:
+                    settings.set_json_payload(payload_json)
+                updated_fields.append('payload_json')
+
             settings.save()
-        
+
         return {
             "status": "ok",
             "recipe_name": recipe_name,
             "updated_fields": updated_fields,
+            "inputs": (settings.get_flat_input_refs() if inputs is not None else None),
+            "outputs": (settings.get_flat_output_refs() if outputs is not None else None),
             "message": f"Recipe '{recipe_name}' updated successfully"
         }
-        
+
     except Exception as e:
         return {
             "status": "error",
@@ -398,24 +453,37 @@ def get_recipe_info(
         # Get recipe settings
         settings = recipe.get_settings()
         
-        # Get inputs and outputs
-        inputs = recipe.get_inputs()
-        outputs = recipe.get_outputs()
-        
+        # Get inputs and outputs from the recipe settings. This dataikuapi
+        # version's DSSRecipe has no get_inputs()/get_outputs(); the flat ref
+        # helpers on the settings object return plain dataset-name strings.
+        inputs = settings.get_flat_input_refs()
+        outputs = settings.get_flat_output_refs()
+
+        # Creation/modification info is NOT in get_metadata() (which only carries
+        # checklists/tags/custom on this version). It lives in the recipe's raw
+        # definition under creationTag/versionTag, as epoch-millisecond stamps.
+        raw_def = settings.get_recipe_raw_definition()
+        creation_tag = raw_def.get("creationTag", {}) or {}
+        version_tag = raw_def.get("versionTag", {}) or {}
+
+        from datetime import datetime as _dt
+        def _iso(ms):
+            return _dt.fromtimestamp(ms / 1000).isoformat() if ms else None
+
         return {
             "status": "ok",
             "recipe_info": {
                 "id": recipe.id,
                 "name": recipe_name,
                 "type": _recipe_type(recipe),
-                "description": metadata.get("description", ""),
-                "tags": metadata.get("tags", []),
-                "inputs": [{"name": inp["ref"], "project": inp.get("projectKey", project_key)} for inp in inputs],
-                "outputs": [{"name": out["ref"], "project": out.get("projectKey", project_key)} for out in outputs],
-                "creation_date": metadata.get("creationDate"),
-                "last_modified": metadata.get("lastModifiedDate"),
-                "last_modified_by": metadata.get("lastModifiedBy", {}).get("login"),
-                "custom_fields": metadata.get("customFields", {})
+                "description": raw_def.get("shortDesc", metadata.get("description", "")),
+                "tags": raw_def.get("tags", metadata.get("tags", [])),
+                "inputs": [{"name": ref, "project": project_key} for ref in inputs],
+                "outputs": [{"name": ref, "project": project_key} for ref in outputs],
+                "creation_date": _iso(creation_tag.get("lastModifiedOn")),
+                "last_modified": _iso(version_tag.get("lastModifiedOn")),
+                "last_modified_by": (version_tag.get("lastModifiedBy") or {}).get("login"),
+                "custom_fields": raw_def.get("customFields", metadata.get("custom", {}).get("kv", {})),
             }
         }
         

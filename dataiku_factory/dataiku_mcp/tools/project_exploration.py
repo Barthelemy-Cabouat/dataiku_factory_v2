@@ -301,21 +301,110 @@ def search_project_objects(
         }
 
 
+def _read_rows_bounded(dataset, schema_columns, max_rows, timeout):
+    """Read up to `max_rows` rows from a dataset without scanning the whole table.
+
+    ``DSSDataset.iter_rows()`` opens a GET on ``/data/`` that streams the ENTIRE
+    dataset (a ``SELECT *`` for SQL/Snowflake datasets). The previous code wrapped
+    that in ``itertools.islice`` and broke early, but that left the HTTP response
+    open and NEVER called the ``finish-streaming`` endpoint, leaking a server-side
+    read session each call. After a few calls the backend stalls new reads — the
+    "get_dataset_sample keeps hanging" symptom.
+
+    This reader:
+      * streams the same endpoint but stops after `max_rows`,
+      * deterministically closes the HTTP response (``gen.close()``), and
+      * calls ``finish-streaming`` to release the server-side session.
+    The read runs in a worker thread bounded by `timeout` so a genuinely stuck or
+    unbuilt backend raises instead of hanging the whole MCP server. On timeout the
+    stream is closed in the background and a TimeoutError is raised.
+    """
+    import uuid
+    import itertools
+    import threading
+    from dataikuapi.dss.dataset import DataikuStreamedHttpUTF8CSVReader
+
+    client = dataset.client
+    read_session_id = str(uuid.uuid4())
+    holder: Dict[str, Any] = {}
+
+    def _cleanup(gen):
+        try:
+            gen.close()  # triggers the reader's `with closing(...)` -> closes HTTP response
+        except Exception:
+            pass
+        try:
+            client._perform_empty(
+                "GET",
+                "/projects/%s/datasets/%s/finish-streaming/" % (
+                    dataset.project_key, dataset.dataset_name),
+                params={"readSessionId": read_session_id},
+            )
+        except Exception:
+            pass
+
+    def _worker():
+        try:
+            csv_stream = client._perform_raw(
+                "GET",
+                "/projects/%s/datasets/%s/data/" % (
+                    dataset.project_key, dataset.dataset_name),
+                params={
+                    "format": "tsv-excel-noheader",
+                    "partitions": None,
+                    "readSessionId": read_session_id,
+                },
+            )
+        except Exception as e:
+            holder["error"] = f"failed to open data stream: {e}"
+            return
+        gen = DataikuStreamedHttpUTF8CSVReader(schema_columns, csv_stream).iter_rows()
+        holder["gen"] = gen
+        try:
+            holder["rows"] = list(itertools.islice(gen, max_rows))
+        except Exception as e:
+            holder["error"] = f"failed while reading rows: {e}"
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+    t.join(timeout)
+
+    if t.is_alive():
+        gen = holder.get("gen")
+        if gen is not None:
+            threading.Thread(target=_cleanup, args=(gen,), daemon=True).start()
+        raise TimeoutError(
+            f"reading {max_rows} sample rows exceeded {timeout}s — the dataset "
+            f"backend did not return data in time (it may be very large, slow, "
+            f"or not built yet)"
+        )
+
+    gen = holder.get("gen")
+    if gen is not None:
+        _cleanup(gen)
+    if "error" in holder:
+        raise RuntimeError(holder["error"])
+    return holder.get("rows", [])
+
+
 def get_dataset_sample(
     project_key: str,
     dataset_name: str,
     rows: int = 100,
-    columns: Optional[List[str]] = None
+    columns: Optional[List[str]] = None,
+    timeout: int = 90,
 ) -> Dict[str, Any]:
     """
     Get sample data from datasets.
-    
+
     Args:
         project_key: The project key
         dataset_name: Name of the dataset
         rows: Number of sample rows
         columns: Specific columns to include (optional)
-        
+        timeout: Max seconds to wait for the backend to return rows before
+            aborting (default 90). Raise it for very large/slow datasets.
+
     Returns:
         Dict containing sample data and schema
     """
@@ -345,17 +434,19 @@ def get_dataset_sample(
             filtered_schema_columns = schema_columns
             columns = [col["name"] for col in schema_columns]
         
-        # Get sample data via iter_rows() — rows are plain lists aligned with schema_columns.
-        # Build an index map so we can reconstruct dicts and honour column filtering.
+        # Get sample data via a bounded streaming read (see _read_rows_bounded):
+        # rows are plain lists aligned with schema_columns. Build an index map so
+        # we can reconstruct dicts and honour column filtering.
         all_col_names = [c["name"] for c in schema_columns]
         col_indices = {name: i for i, name in enumerate(all_col_names)}
         target_indices = [col_indices[c] for c in columns]  # columns list already validated above
 
         try:
-            import itertools
-            sample_data = []
-            for raw_row in itertools.islice(dataset.iter_rows(), rows):
-                sample_data.append({columns[j]: raw_row[idx] for j, idx in enumerate(target_indices)})
+            raw_rows = _read_rows_bounded(dataset, schema_columns, rows, timeout)
+            sample_data = [
+                {columns[j]: raw_row[idx] for j, idx in enumerate(target_indices)}
+                for raw_row in raw_rows
+            ]
             actual_rows = len(sample_data)
         except Exception as e:
             return {

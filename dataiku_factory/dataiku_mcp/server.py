@@ -75,10 +75,14 @@ def update_recipe(
     engine_type: Optional[str] = None,
     container_conf: Optional[Dict[str, Any]] = None,
     resource_settings: Optional[Dict[str, Any]] = None,
+    inputs: Optional[List[str]] = None,
+    outputs: Optional[List[str]] = None,
+    payload_json: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
-    Update an existing recipe.
-    
+    Update an existing recipe — code, metadata, settings, inputs/outputs, or the
+    visual (non-code) recipe definition.
+
     Args:
         project_key: The project key
         recipe_name: Name of the recipe to update
@@ -89,7 +93,15 @@ def update_recipe(
         engine_type: Updated engine selection
         container_conf: Updated container configuration
         resource_settings: Updated resource settings
-        
+        inputs: If given, set the recipe's main-role INPUT datasets to exactly
+            this list (adds new, drops omitted, preserves order). Other roles
+            (e.g. a scoring recipe's "model") are left untouched.
+        outputs: If given, set the recipe's main-role OUTPUT datasets to exactly
+            this list. The datasets must already exist.
+        payload_json: For VISUAL (non-code) recipes — the recipe definition to
+            write (e.g. grouping keys, join conditions, prepare-script steps).
+            Accepts a dict or a raw JSON string. Use where `code` does not apply.
+
     Returns:
         Dict containing update result
     """
@@ -103,6 +115,9 @@ def update_recipe(
         engine_type=engine_type,
         container_conf=container_conf,
         resource_settings=resource_settings,
+        inputs=inputs,
+        outputs=outputs,
+        payload_json=payload_json,
     )
 
 @mcp.tool()
@@ -525,21 +540,30 @@ def get_dataset_sample(
     project_key: str,
     dataset_name: str,
     rows: int = 100,
-    columns: Optional[List[str]] = None
+    columns: Optional[List[str]] = None,
+    timeout: int = 90,
 ) -> Dict[str, Any]:
     """
     Get sample data from datasets.
-    
+
+    Reads only the first `rows` rows via a bounded, self-cleaning stream (it no
+    longer scans the whole table or leak server-side read sessions), so it stays
+    fast on large SQL/Snowflake datasets.
+
     Args:
         project_key: The project key
         dataset_name: Name of the dataset
         rows: Number of sample rows
         columns: Specific columns to include
-        
+        timeout: Max seconds to wait for the backend before aborting (default
+            90). Raise it for very large or slow datasets.
+
     Returns:
         Dict containing sample data and schema
     """
-    return project_exploration.get_dataset_sample(project_key, dataset_name, rows, columns)
+    return project_exploration.get_dataset_sample(
+        project_key, dataset_name, rows, columns, timeout
+    )
 
 # Register Environment Configuration Tools
 @mcp.tool()
