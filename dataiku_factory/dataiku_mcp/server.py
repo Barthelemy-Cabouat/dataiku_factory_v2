@@ -6,11 +6,14 @@ from mcp.server.fastmcp import FastMCP
 from typing import Any, Dict, List, Optional
 import json
 import logging
+import sys
 
 from dataiku_mcp.client import get_client, get_project, list_projects
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Configure logging.
+# stdout carries the JSON-RPC frames for the stdio transport, so log output
+# must go to stderr or it corrupts the protocol stream.
+logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 logger = logging.getLogger(__name__)
 
 # Create MCP server

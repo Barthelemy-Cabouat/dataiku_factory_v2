@@ -1,6 +1,6 @@
 # Dataiku Factory - MCP Tool Suite
 
-A comprehensive Model Context Protocol (MCP) tool suite for Dataiku DSS integration. This project provides Claude Code with direct access to Dataiku DSS for managing recipes, datasets, and scenarios.
+A comprehensive Model Context Protocol (MCP) tool suite for Dataiku DSS integration. It exposes **67 tools** covering recipes, datasets, scenarios, jobs, Jupyter and SQL notebooks, wiki articles, flow zones and discussions — usable from Claude Code, Codex, or as a **Local MCP tool inside Dataiku DSS itself**.
 
 ## 🚀 Quick Start
 
@@ -13,177 +13,258 @@ A comprehensive Model Context Protocol (MCP) tool suite for Dataiku DSS integrat
 ### Installation
 
 ```bash
-# Clone and setup
 git clone <repository-url>
 cd dataiku_factory
 
-# Run installation script
-./install.sh
-
-# Or install manually:
+# Recommended
 python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+source .venv/bin/activate     # Windows: .venv\Scripts\activate
 pip install -e .
+
+# Or use the helper script
+./install.sh
 ```
+
+This installs the `dataiku-mcp-server` console script into your environment's `bin/` (or `Scripts\` on Windows). That launcher is the supported entrypoint everywhere.
 
 ### Configuration
 
-1. Copy environment template:
+The server reads its connection settings from environment variables:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `DSS_HOST` | yes | DSS base URL, e.g. `https://dss.example.com:10000` |
+| `DSS_API_KEY` | yes | DSS API key. Scope it to the projects the agent should reach |
+| `DSS_INSECURE_TLS` | no | `true` to skip certificate verification (self-signed certs only) |
+
+For local development, copy the template and edit it:
+
 ```bash
 cp .env.sample .env
 ```
 
-2. Configure your DSS connection in `.env`:
+`client.py` loads `.env` from the package's parent directory, so this works from a source checkout. **In any deployed setup, pass the variables explicitly via the MCP client config instead** — once the package is pip-installed, the `.env` lookup resolves inside `site-packages` and will not find your file.
+
+Verify the install:
+
 ```bash
-DSS_HOST=https://your-dss-instance.com:10000
-DSS_API_KEY=your-api-key-here
-DSS_INSECURE_TLS=true  # Only if using self-signed certificates
+dataiku-mcp-server --help
 ```
 
-3. Test your connection:
-```bash
-python scripts/mcp_server.py --help
+### CLI
+
+```
+dataiku-mcp-server [--transport stdio|sse] [--host HOST] [--port PORT] [--verbose]
 ```
 
-### Claude Code Integration
+`stdio` is the default and the only transport used by Claude Code, Codex and Dataiku. Log output always goes to **stderr** — stdout carries the JSON-RPC frames and must stay clean.
 
-Register the MCP server with Claude Code:
+## 🔌 Client Integration
+
+### Claude Code
 
 ```bash
 claude mcp add dataiku-factory \
     -e DSS_HOST=https://your-dss-instance.com:10000 \
     -e DSS_API_KEY=your-api-key-here \
     -e DSS_INSECURE_TLS=true \
-    -- python scripts/mcp_server.py
+    -- /path/to/.venv/bin/dataiku-mcp-server
 ```
 
-### Codex Integration
-
-Codex can use the same stdio server directly. On Windows:
-
-```powershell
-codex mcp add dataiku-factory -- `
-  C:\path\to\dataiku_factory\.venv\Scripts\python.exe `
-  C:\path\to\dataiku_factory\scripts\mcp_server.py `
-  --transport stdio
-```
-
-If you do not want to depend on `.env`, pass the connection settings explicitly:
+### Codex
 
 ```powershell
 codex mcp add dataiku-factory `
   --env DSS_HOST=https://your-dss-instance.com:10000 `
   --env DSS_API_KEY=your-api-key-here `
   --env DSS_INSECURE_TLS=true `
-  -- C:\path\to\dataiku_factory\.venv\Scripts\python.exe `
-     C:\path\to\dataiku_factory\scripts\mcp_server.py `
+  -- C:\path\to\dataiku_factory\.venv\Scripts\dataiku-mcp-server.exe `
      --transport stdio
 ```
 
-Verify it with:
+Verify with `codex mcp list` / `codex mcp get dataiku-factory`.
 
-```powershell
-codex mcp list
-codex mcp get dataiku-factory
+### Dataiku DSS (Local MCP tool)
+
+DSS 14+ can run this server as a managed **Local MCP** agent tool. Setup notes, in the order they bite:
+
+**1. Create a dedicated code environment**, Python **3.11+**. `fastmcp`/`mcp` requires ≥3.10 and this package requires ≥3.11, so an existing 3.9 env will fail at package resolution.
+
+**2. Install this package into that code env** rather than dropping the repo in the DSS project library. Add to the env's requested packages:
+
 ```
+git+https://github.com/<org>/dataiku_factory_v2.git@<commit-sha>#subdirectory=dataiku_factory
+```
+
+Pin the SHA for anything beyond a design-node trial. Code envs resolve packages at **build time**, so tracking a branch means the server changes only when the env is rebuilt — silently, and without a signal that tool descriptors moved.
+
+> **Why not the project library?** With User Isolation enabled, DSS code runs as `dssuser_*`, while `$DIP_HOME/config/` is mode `0700` owned by `dataiku`. The MCP subprocess cannot read the project library at all — you get `[Errno 13] Permission denied`.
+
+**3. Configure the tool** (type: Local MCP):
+
+```
+command: /path/to/dss_data/code-envs/python/<env-name>/bin/dataiku-mcp-server
+args:    (none)
+env:     DSS_HOST=https://your-dss:10000
+         DSS_API_KEY=<scoped key>
+         DSS_INSECURE_TLS=false
+```
+
+**4. Use local (non-containerized) execution.** Absolute host paths do not resolve inside a DSS container image; a containerized tool reports `[Errno 2] No such file or directory` for a launcher that plainly exists on the host.
+
+**5. Enable tools selectively.** All MCP tools are disabled by default in DSS. See the safety ratings in the catalog below, and wrap anything mutating in DSS's **Human approval**.
 
 ## 📚 MCP Tool Catalog
 
-### Core Recipe Management Tools
+**67 tools.** Safety ratings: 🟢 read-only · 🟡 mutates metadata/objects · 🟠 executes code or consumes compute · 🔴 destructive.
 
-| Tool | Description | Key Parameters |
-|------|-------------|----------------|
-| `create_recipe` | Create new recipe | `project_key`, `recipe_type`, `recipe_name`, `inputs`, `outputs`, `code` |
-| `update_recipe` | Update existing recipe | `project_key`, `recipe_name`, `**kwargs` |
-| `delete_recipe` | Delete recipe | `project_key`, `recipe_name` |
-| `run_recipe` | Execute recipe | `project_key`, `recipe_name`, `build_mode` |
+### Recipes (7)
 
-### Core Dataset Management Tools
+| Tool | Safety | Key Parameters |
+|------|--------|----------------|
+| `create_recipe` | 🟡 | `project_key`, `recipe_type`, `recipe_name`, `inputs`, `outputs`, `code` |
+| `update_recipe` | 🟡 | `project_key`, `recipe_name`, `code`, `inputs`, `outputs`, `payload_json`, `engine_type`, … |
+| `delete_recipe` | 🔴 | `project_key`, `recipe_name` |
+| `run_recipe` | 🟠 | `project_key`, `recipe_name`, `build_mode` |
+| `get_recipe_code` | 🟢 | `project_key`, `recipe_name` |
+| `validate_recipe_syntax` | 🟢 | `project_key`, `recipe_name`, `code` |
+| `test_recipe_dry_run` | 🟢 | `project_key`, `recipe_name`, `sample_rows` |
 
-| Tool | Description | Key Parameters |
-|------|-------------|----------------|
-| `create_dataset` | Create new dataset | `project_key`, `dataset_name`, `dataset_type`, `params` |
-| `update_dataset` | Update dataset settings | `project_key`, `dataset_name`, `**kwargs` |
-| `delete_dataset` | Delete dataset | `project_key`, `dataset_name`, `drop_data` |
-| `build_dataset` | Build dataset | `project_key`, `dataset_name`, `mode`, `partition` |
-| `inspect_dataset_schema` | Get dataset schema | `project_key`, `dataset_name` |
-| `check_dataset_metrics` | Get dataset metrics | `project_key`, `dataset_name` |
+### Datasets (7)
 
-### Core Scenario Management Tools
+| Tool | Safety | Key Parameters |
+|------|--------|----------------|
+| `create_dataset` | 🟡 | `project_key`, `dataset_name`, `dataset_type`, `params` |
+| `update_dataset` | 🟡 | `project_key`, `dataset_name`, `kwargs` |
+| `delete_dataset` | 🔴 | `project_key`, `dataset_name`, `drop_data` |
+| `build_dataset` | 🟠 | `project_key`, `dataset_name`, `mode`, `partition` |
+| `inspect_dataset_schema` | 🟢 | `project_key`, `dataset_name` |
+| `check_dataset_metrics` | 🟢 | `project_key`, `dataset_name` |
+| `get_dataset_sample` | 🟢 | `project_key`, `dataset_name`, `rows`, `columns`, `timeout` |
 
-| Tool | Description | Key Parameters |
-|------|-------------|----------------|
-| `create_scenario` | Create new scenario | `project_key`, `scenario_name`, `scenario_type`, `definition` |
-| `update_scenario` | Update scenario settings | `project_key`, `scenario_id`, `**kwargs` |
-| `delete_scenario` | Delete scenario | `project_key`, `scenario_id` |
-| `add_scenario_trigger` | Add trigger to scenario | `project_key`, `scenario_id`, `trigger_type`, `**params` |
-| `remove_scenario_trigger` | Remove scenario trigger | `project_key`, `scenario_id`, `trigger_idx` |
-| `run_scenario` | Execute scenario | `project_key`, `scenario_id` |
+### Scenarios (9)
 
-### 🔧 Advanced Scenario Management Tools
+| Tool | Safety | Key Parameters |
+|------|--------|----------------|
+| `create_scenario` | 🟡 | `project_key`, `scenario_name`, `scenario_type`, `definition` |
+| `update_scenario` | 🟡 | `project_key`, `scenario_id`, `kwargs` |
+| `delete_scenario` | 🔴 | `project_key`, `scenario_id` |
+| `run_scenario` | 🟠 | `project_key`, `scenario_id` |
+| `clone_scenario` | 🟡 | `project_key`, `source_scenario_id`, `new_scenario_name`, `modifications` |
+| `add_scenario_trigger` | 🟡 | `project_key`, `scenario_id`, `trigger_type`, `params` |
+| `remove_scenario_trigger` | 🟡 | `project_key`, `scenario_id`, `trigger_idx` |
+| `get_scenario_steps` | 🟢 | `project_key`, `scenario_id` |
+| `get_scenario_logs` | 🟢 | `project_key`, `scenario_id`, `run_id` |
 
-| Tool | Description | Key Parameters |
-|------|-------------|----------------|
-| `get_scenario_logs` | Get detailed run logs and error messages | `project_key`, `scenario_id`, `run_id` |
-| `get_scenario_steps` | Get step configuration including Python code | `project_key`, `scenario_id` |
-| `clone_scenario` | Clone scenario with modifications | `project_key`, `source_scenario_id`, `new_scenario_name`, `modifications` |
+### Jobs & Monitoring (5)
 
-### 💻 Code and Recipe Development Tools
+| Tool | Safety | Key Parameters |
+|------|--------|----------------|
+| `get_recent_runs` | 🟢 | `project_key`, `limit`, `status_filter` |
+| `get_job_details` | 🟢 | `project_key`, `job_id`, `log_lines`, `log_from_end` |
+| `get_job_activities` | 🟢 | `project_key`, `job_id` |
+| `get_job_log` | 🟢 | `project_key`, `job_id`, `lines`, `grep_pattern`, `severity`, `activity_id` |
+| `cancel_running_jobs` | 🔴 | `project_key`, `job_ids` |
 
-| Tool | Description | Key Parameters |
-|------|-------------|----------------|
-| `get_recipe_code` | Extract actual Python/SQL code from recipes | `project_key`, `recipe_name` |
-| `validate_recipe_syntax` | Validate Python/SQL syntax before running | `project_key`, `recipe_name`, `code` |
-| `test_recipe_dry_run` | Test recipe logic without execution | `project_key`, `recipe_name`, `sample_rows` |
+### Jupyter Notebooks (9)
 
-### 🗺️ Project Exploration Tools
+| Tool | Safety | Key Parameters |
+|------|--------|----------------|
+| `list_jupyter_notebooks` | 🟢 | `project_key`, `active` |
+| `get_jupyter_notebook` | 🟢 | `project_key`, `notebook_name`, `include_outputs` |
+| `get_jupyter_notebook_outputs` | 🟢 | `project_key`, `notebook_name`, `max_output_chars` |
+| `create_jupyter_notebook` | 🟡 | `project_key`, `notebook_name`, `notebook_content`, `cells`, `metadata` |
+| `update_jupyter_notebook` | 🟡 | `project_key`, `notebook_name`, `notebook_content`, `cells`, `metadata` |
+| `edit_jupyter_notebook_cells` | 🟡 | `project_key`, `notebook_name`, `operation`, `cells`, `index`, `count` |
+| `clear_jupyter_notebook_outputs` | 🟡 | `project_key`, `notebook_name` |
+| `delete_jupyter_notebook` | 🔴 | `project_key`, `notebook_name` |
+| `run_jupyter_notebook` | 🟠 | `project_key`, `notebook_name`, `kernel_name`, `timeout_per_cell`, `stop_on_error`, `write_outputs` |
 
-| Tool | Description | Key Parameters |
-|------|-------------|----------------|
-| `get_project_flow` | Get complete data flow/pipeline structure | `project_key` |
-| `search_project_objects` | Search datasets, recipes, scenarios by pattern | `project_key`, `search_term`, `object_types` |
-| `get_dataset_sample` | Get sample data from datasets | `project_key`, `dataset_name`, `rows`, `columns` |
+### SQL Notebooks & Queries (9)
 
-### ⚙️ Environment and Configuration Tools
+| Tool | Safety | Key Parameters |
+|------|--------|----------------|
+| `list_sql_notebooks` | 🟢 | `project_key` |
+| `get_sql_notebook` | 🟢 | `project_key`, `notebook_id`, `include_history` |
+| `create_sql_notebook` | 🟡 | `project_key`, `notebook_content`, `cells`, `connection`, `language` |
+| `update_sql_notebook` | 🟡 | `project_key`, `notebook_id`, `notebook_content`, `cells`, `connection`, `language` |
+| `edit_sql_notebook_cells` | 🟡 | `project_key`, `notebook_id`, `operation`, `cells`, `index`, `count` |
+| `clear_sql_notebook_history` | 🟡 | `project_key`, `notebook_id`, `cell_id`, `num_runs_to_retain` |
+| `delete_sql_notebook` | 🔴 | `project_key`, `notebook_id` |
+| `execute_sql_notebook` | 🟠 | `project_key`, `notebook_id`, `cell_index`, `connection`, `max_rows`, `stop_on_error` |
+| `execute_sql_query` | 🟠 | `connection`, `query`, `project_key`, `max_rows`, `query_type`, `max_output_chars` |
 
-| Tool | Description | Key Parameters |
-|------|-------------|----------------|
-| `get_code_environments` | List available Python/R environments | `project_key` |
-| `get_project_variables` | Get project-level variables and secrets | `project_key` |
-| `get_connections` | List available data connections | `project_key` |
+> `execute_sql_query` runs arbitrary SQL against a DSS connection. Treat it as the highest-risk tool in the suite — it inherits whatever the connection's credentials permit, including DDL and DML.
 
-### 🔍 Debugging and Monitoring Tools
+### Wiki (4)
 
-| Tool | Description | Key Parameters |
-|------|-------------|----------------|
-| `get_recent_runs` | Get recent run history across scenarios/recipes | `project_key`, `limit`, `status_filter` |
-| `get_job_details` | Get detailed job execution information | `project_key`, `job_id` |
-| `cancel_running_jobs` | Cancel running jobs/scenarios | `project_key`, `job_ids` |
+| Tool | Safety | Key Parameters |
+|------|--------|----------------|
+| `list_wiki_articles` | 🟢 | `project_key` |
+| `get_wiki_article` | 🟢 | `project_key`, `article_id` |
+| `create_wiki_article` | 🟡 | `project_key`, `article_name`, `body`, `parent_id` |
+| `update_wiki_article` | 🟡 | `project_key`, `article_id`, `body`, `article_name` |
 
-### 🚀 Productivity Tools
+### Flow Zones (5)
 
-| Tool | Description | Key Parameters |
-|------|-------------|----------------|
-| `duplicate_project_structure` | Copy project structure to new project | `source_project_key`, `target_project_key`, `include_data` |
-| `export_project_config` | Export project configuration as JSON/YAML | `project_key`, `format` |
-| `batch_update_objects` | Update multiple objects with similar changes | `project_key`, `object_type`, `pattern`, `updates` |
+| Tool | Safety | Key Parameters |
+|------|--------|----------------|
+| `list_zones` | 🟢 | `project_key` |
+| `get_zone_of_object` | 🟢 | `project_key`, `object_name`, `object_type` |
+| `create_zone` | 🟡 | `project_key`, `zone_name`, `color` |
+| `move_to_zone` | 🟡 | `project_key`, `zone`, `items` |
+| `delete_zone` | 🔴 | `project_key`, `zone` |
 
-**Total: 34 Tools** (16 core + 18 advanced)
+### Discussions (4)
+
+| Tool | Safety | Key Parameters |
+|------|--------|----------------|
+| `list_object_discussions` | 🟢 | `project_key`, `object_type`, `object_id` |
+| `get_object_discussion` | 🟢 | `project_key`, `object_type`, `object_id`, `discussion_id` |
+| `create_object_discussion` | 🟡 | `project_key`, `object_type`, `object_id`, `topic`, `message` |
+| `reply_to_object_discussion` | 🟡 | `project_key`, `object_type`, `object_id`, `discussion_id`, `message` |
+
+### Project Exploration & Configuration (5)
+
+| Tool | Safety | Key Parameters |
+|------|--------|----------------|
+| `get_project_flow` | 🟢 | `project_key` |
+| `search_project_objects` | 🟢 | `project_key`, `search_term`, `object_types` |
+| `get_project_variables` | 🟢 | `project_key` |
+| `get_connections` | 🟢 | `project_key`, `scope` |
+| `get_code_environments` | 🟢 | `project_key`, `scope` |
+
+### Productivity (3)
+
+| Tool | Safety | Key Parameters |
+|------|--------|----------------|
+| `export_project_config` | 🟢 | `project_key`, `format` |
+| `duplicate_project_structure` | 🟡 | `source_project_key`, `target_project_key`, `include_data` |
+| `batch_update_objects` | 🔴 | `project_key`, `object_type`, `pattern`, `updates` |
+
+### Resources
+
+| Resource URI | Description |
+|--------------|-------------|
+| `projects://` | List all available Dataiku projects |
+| `project://{project_key}` | Metadata for a specific project |
+
+### Suggested read-only starting set
+
+When first wiring this into an agent, enable only:
+
+```
+get_project_flow, search_project_objects, inspect_dataset_schema,
+get_dataset_sample, get_recipe_code, get_scenario_steps, get_scenario_logs,
+get_recent_runs, get_job_details, get_job_log, get_connections,
+get_code_environments, list_wiki_articles, get_wiki_article
+```
 
 ## 🔧 Usage Examples
 
-### Core Operations
-
-#### Creating a Python Recipe
+#### Creating a Python recipe
 
 ```python
-# Via Claude Code chat:
-"""
-Create a python recipe called "data_cleaner" that takes "raw_data" as input 
-and outputs "clean_data" in project "ANALYTICS_PROJECT"
-"""
-
-# This translates to:
 create_recipe(
     project_key="ANALYTICS_PROJECT",
     recipe_type="python",
@@ -191,164 +272,47 @@ create_recipe(
     inputs=["raw_data"],
     outputs=[{"name": "clean_data", "new": True, "connection": "filesystem_managed"}],
     code="""
-import pandas as pd
+import dataiku
 df = dataiku.Dataset("raw_data").get_dataframe()
-# Add your cleaning logic here
-df_clean = df.dropna()
-dataiku.Dataset("clean_data").write_with_schema(df_clean)
-"""
+dataiku.Dataset("clean_data").write_with_schema(df.dropna())
+""",
 )
 ```
 
-#### Building a Dataset
+#### Diagnosing a failed pipeline
 
 ```python
-# Via Claude Code chat:
-"""
-Build the dataset "user_analytics" in project "BI" with recursive build mode
-"""
-
-# This translates to:
-build_dataset(
-    project_key="BI",
-    dataset_name="user_analytics",
-    mode="RECURSIVE_BUILD"
-)
+get_recent_runs(project_key="DATA_PIPELINE", limit=20, status_filter="FAILED")
+get_job_details(project_key="DATA_PIPELINE", job_id="job_12345")
+get_job_log(project_key="DATA_PIPELINE", job_id="job_12345",
+            severity="ERROR", lines=200, from_end=True)
 ```
 
-#### Adding a Daily Scenario Trigger
+#### Exploring a project
 
 ```python
-# Via Claude Code chat:
-"""
-Add a daily trigger to scenario "daily_etl" that runs at 6:00 AM UTC
-"""
-
-# This translates to:
-add_scenario_trigger(
-    project_key="DATA_PIPELINE",
-    scenario_id="daily_etl",
-    trigger_type="daily",
-    hour=6,
-    minute=0,
-    timezone="UTC"
-)
+get_project_flow(project_key="SALES_ANALYTICS")
+search_project_objects(project_key="SALES_ANALYTICS", search_term="customer",
+                       object_types=["datasets", "recipes", "scenarios"])
+get_dataset_sample(project_key="FINANCE_PROJECT", dataset_name="transactions",
+                   rows=500, columns=["customer_id", "amount"])
 ```
 
-### Advanced Operations
-
-#### Getting Scenario Logs for Failed Runs
+#### Running an ad-hoc query
 
 ```python
-# Via Claude Code chat:
-"""
-Show me the logs for the latest failed run of scenario "data_processing"
-"""
-
-# This translates to:
-get_scenario_logs(
-    project_key="ANALYTICS_PROJECT",
-    scenario_id="data_processing"
-)
+execute_sql_query(connection="snowflake_prod",
+                  query="SELECT COUNT(*) FROM analytics.public.orders",
+                  max_rows=100)
 ```
 
-#### Extracting and Validating Recipe Code
+#### Working with notebooks
 
 ```python
-# Via Claude Code chat:
-"""
-Extract the code from recipe "customer_segmentation" and validate its syntax
-"""
-
-# This translates to:
-get_recipe_code(
-    project_key="ML_PROJECT",
-    recipe_name="customer_segmentation"
-)
-
-validate_recipe_syntax(
-    project_key="ML_PROJECT",
-    recipe_name="customer_segmentation"
-)
-```
-
-#### Exploring Project Structure
-
-```python
-# Via Claude Code chat:
-"""
-Show me the complete data flow for project "SALES_ANALYTICS" and find all datasets containing "customer"
-"""
-
-# This translates to:
-get_project_flow(
-    project_key="SALES_ANALYTICS"
-)
-
-search_project_objects(
-    project_key="SALES_ANALYTICS",
-    search_term="customer",
-    object_types=["datasets", "recipes", "scenarios"]
-)
-```
-
-#### Getting Sample Data
-
-```python
-# Via Claude Code chat:
-"""
-Get a sample of 500 rows from dataset "transactions" showing only customer_id and amount columns
-"""
-
-# This translates to:
-get_dataset_sample(
-    project_key="FINANCE_PROJECT",
-    dataset_name="transactions",
-    rows=500,
-    columns=["customer_id", "amount"]
-)
-```
-
-#### Monitoring and Debugging
-
-```python
-# Via Claude Code chat:
-"""
-Show me the recent failed runs in project "DATA_PIPELINE" and get details for any failed jobs
-"""
-
-# This translates to:
-get_recent_runs(
-    project_key="DATA_PIPELINE",
-    limit=20,
-    status_filter="FAILED"
-)
-
-get_job_details(
-    project_key="DATA_PIPELINE",
-    job_id="job_12345"
-)
-```
-
-#### Productivity Operations
-
-```python
-# Via Claude Code chat:
-"""
-Export the configuration of project "TEMPLATE_PROJECT" as YAML and duplicate its structure to "NEW_PROJECT"
-"""
-
-# This translates to:
-export_project_config(
-    project_key="TEMPLATE_PROJECT",
-    format="yaml"
-)
-
-duplicate_project_structure(
-    source_project_key="TEMPLATE_PROJECT",
-    target_project_key="NEW_PROJECT",
-    include_data=False
-)
+list_jupyter_notebooks(project_key="ML_PROJECT", active=True)
+run_jupyter_notebook(project_key="ML_PROJECT", notebook_name="feature_eng",
+                     stop_on_error=True, write_outputs=True)
+get_jupyter_notebook_outputs(project_key="ML_PROJECT", notebook_name="feature_eng")
 ```
 
 ## 🏗️ Architecture
@@ -357,44 +321,110 @@ duplicate_project_structure(
 dataiku_factory/
 ├── dataiku_mcp/
 │   ├── __init__.py
+│   ├── cli.py             # Console-script entrypoint (dataiku-mcp-server)
 │   ├── client.py          # DSS client wrapper
-│   ├── server.py          # MCP server implementation
+│   ├── server.py          # FastMCP server + tool registration
 │   └── tools/
-│       ├── recipes.py              # Recipe management tools
-│       ├── datasets.py             # Dataset management tools
-│       ├── scenarios.py            # Scenario management tools
-│       ├── advanced_scenarios.py   # Advanced scenario tools
-│       ├── code_development.py     # Code development tools
-│       ├── project_exploration.py  # Project exploration tools
-│       ├── environment_config.py   # Environment configuration
-│       ├── monitoring_debug.py     # Monitoring & debugging
-│       └── productivity.py         # Productivity tools
+│       ├── api_helpers.py          # Shared REST helpers
+│       ├── recipes.py              # Recipe management
+│       ├── datasets.py             # Dataset management
+│       ├── scenarios.py            # Scenario management
+│       ├── advanced_scenarios.py   # Logs, steps, cloning
+│       ├── code_development.py     # Code extraction & validation
+│       ├── project_exploration.py  # Flow, search, samples
+│       ├── environment_config.py   # Connections, code envs, variables
+│       ├── monitoring_debug.py     # Jobs, runs, logs
+│       ├── productivity.py         # Duplication, export, batch updates
+│       ├── notebooks.py            # Jupyter notebook CRUD
+│       ├── notebook_execution.py   # Jupyter execution & outputs
+│       ├── sql_execution.py        # SQL notebooks & ad-hoc queries
+│       ├── wiki.py                 # Wiki articles
+│       ├── flow_zones.py           # Flow zones
+│       └── discussions.py          # Object discussions
 ├── scripts/
-│   └── mcp_server.py      # MCP server entrypoint
-├── install.sh             # Installation script
-├── README.md
+│   └── mcp_server.py      # Dev-only shim -> dataiku_mcp.cli
+├── tests/
+├── install.sh
+├── setup.ps1
 ├── pyproject.toml
 └── .env.sample
 ```
 
+### Note on packaging
+
+The console script points at `dataiku_mcp.cli:main`, **not** `scripts.mcp_server:main`. setuptools' flat-layout auto-discovery excludes top-level `scripts/`, `tests/`, `docs/`, `tools/`, `bin/` and `examples/` directories by default, so a `scripts`-based entrypoint installs a launcher that immediately dies with `ModuleNotFoundError: No module named 'scripts'`. `pyproject.toml` now declares package discovery explicitly:
+
+```toml
+[tool.setuptools.packages.find]
+include = ["dataiku_mcp*"]
+namespaces = false
+```
+
+`scripts/mcp_server.py` is retained purely so `python scripts/mcp_server.py` still works from a source checkout.
+
+### Note on dependency pinning
+
+`mcp` is pinned to `>=1.2,<2`. Version 2.0 removed `mcp.server.fastmcp`, which `server.py` imports; an unpinned install will break at import once 2.x is resolved.
+
 ## 🔒 Security
 
-- **API Key Protection**: Store API keys in environment variables, never in code
-- **SSL Configuration**: Support for self-signed certificates with `DSS_INSECURE_TLS=true`
-- **Permission Validation**: All operations respect DSS user permissions
-- **Error Handling**: Sensitive information is not exposed in error messages
+- **The API key is the real permission boundary.** All tools act with the privileges of `DSS_API_KEY`, regardless of which user is talking to the agent. Scope keys per project; never use an admin key.
+- **Destructive tools ship enabled at the protocol level.** `delete_*`, `batch_update_objects` and `cancel_running_jobs` do what they say. Disable them in your MCP client and gate them behind human approval where the client supports it.
+- **`execute_sql_query` is unrestricted SQL.** Point it at read-only connections, or leave it disabled.
+- **Prompt injection reaches these tools.** Any untrusted text an agent reads — dataset descriptions, wiki bodies, discussion threads — can attempt to steer a tool call. Read-only tool sets are the reliable mitigation.
+- **TLS**: `DSS_INSECURE_TLS=true` disables certificate verification. Development only.
+- **Secrets**: keep `.env` out of version control (it is gitignored) and prefer explicit env vars in client configs.
 
-## 📈 Monitoring
+## 📈 Logging
 
-The MCP server provides logging for monitoring:
+Logs are written to **stderr** at INFO by default, DEBUG with `--verbose`:
 
 ```bash
-# Run with verbose logging
-python scripts/mcp_server.py --verbose
-
-# Check logs for debugging
-tail -f dataiku_mcp.log
+dataiku-mcp-server --verbose
 ```
+
+This is deliberate: the stdio transport reserves stdout for JSON-RPC frames. Any `print()` or stdout log handler added to this codebase will corrupt the protocol stream and clients will report an opaque "Connection closed".
+
+## 🐛 Troubleshooting
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `No matching distribution found for fastmcp` / `mcp` | Code env is Python 3.9 | Create a new env on Python 3.11+; the version can't be changed in place |
+| `ModuleNotFoundError: No module named 'scripts'` | Old entrypoint against an unpackaged directory | Reinstall; the entrypoint is now `dataiku_mcp.cli:main` |
+| `[Errno 13] Permission denied` on a project-library path | User Isolation — `$DIP_HOME/config` is `0700`, owned by `dataiku` | Install the package into the code env instead of reading the DSS project library |
+| `[Errno 2] No such file or directory` for a launcher that exists | Tool is running containerized; host paths don't resolve in the image | Switch to local execution, or use the in-container code env path |
+| `No recorded image tag for env PYTHON <env>` | Code env flagged for containerized execution, image never built | Build the container image, or disable containerized execution |
+| "Connection closed" right after start | Process crashed, or stdout polluted | Run the launcher manually and read stderr; check for `print()` / stdout handlers |
+| Connection refused | Wrong `DSS_HOST`, or DSS not reachable | Verify URL and port, and network egress from the host |
+| SSL certificate errors | Self-signed cert | `DSS_INSECURE_TLS=true` (development only) |
+| Permission denied from DSS API | API key lacks project rights | Grant the key access, or scope the request to permitted projects |
+
+### Manual smoke test
+
+Confirms both that the process starts and that stdout is a clean JSON-RPC stream:
+
+```python
+import subprocess, json, threading, queue
+
+p = subprocess.Popen(["dataiku-mcp-server"], stdin=subprocess.PIPE,
+                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                     text=True, bufsize=1)
+q = queue.Queue()
+threading.Thread(target=lambda: [q.put(l) for l in p.stdout], daemon=True).start()
+send = lambda o: (p.stdin.write(json.dumps(o) + "\n"), p.stdin.flush())
+
+send({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+    "protocolVersion": "2024-11-05", "capabilities": {},
+    "clientInfo": {"name": "probe", "version": "0"}}})
+print(json.loads(q.get(timeout=20))["result"]["serverInfo"])
+
+send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+send({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+print(len(json.loads(q.get(timeout=30))["result"]["tools"]), "tools")
+p.terminate()
+```
+
+Expected: a `serverInfo` dict, then `67 tools`.
 
 ## 🤝 Contributing
 
@@ -407,13 +437,14 @@ tail -f dataiku_mcp.log
 ### Development Setup
 
 ```bash
-# Install development dependencies
 pip install -e .[dev]
 
-# Run code formatting
 black dataiku_mcp/ scripts/
 ruff check dataiku_mcp/ scripts/
+pytest
 ```
+
+New tools are registered with `@mcp.tool()` in `dataiku_mcp/server.py` and implemented in a module under `dataiku_mcp/tools/`. Keep the docstring accurate — MCP clients surface it verbatim, and it is what the model uses to decide when to call the tool.
 
 ## 📝 API Reference
 
@@ -443,41 +474,12 @@ ruff check dataiku_mcp/ scripts/
 - **Monthly**: `monthly` (specific day/time monthly)
 - **Dataset**: `dataset` (on dataset changes)
 
-## 🐛 Troubleshooting
-
-### Common Issues
-
-1. **Connection refused**: Check DSS_HOST and ensure DSS is running
-2. **SSL certificate errors**: Set `DSS_INSECURE_TLS=true` for self-signed certificates
-3. **API key invalid**: Verify API key in DSS admin panel
-4. **Permission denied**: Ensure API key has required project permissions
-
-### Debug Mode
-
-Enable debug logging:
-
-```bash
-python scripts/mcp_server.py --verbose
-```
-
-### Connection Testing
-
-Test the MCP server connection:
-
-```bash
-python scripts/mcp_server.py --verbose
-```
-
 ## 📄 License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+MIT — see the LICENSE file.
 
 ## 🙏 Acknowledgments
 
 - Built for [Dataiku DSS](https://www.dataiku.com/)
-- Uses [Model Context Protocol](https://modelcontextprotocol.io/)
+- Uses the [Model Context Protocol](https://modelcontextprotocol.io/)
 - Integrated with [Claude Code](https://claude.ai/code)
-
----
-
-**Ready to enhance your Dataiku workflows with AI assistance!** 🚀
