@@ -53,12 +53,17 @@ def _jupyter_content(
     if notebook_content is not None:
         return notebook_content
 
-    # DSS requires language info in the notebook metadata
+    # DSS requires language info in the notebook metadata.
+    # Default to the stock 'python3' kernel: code-env kernels such as
+    # 'python_env_DWAS_python' are per-instance and may not be installed, which
+    # makes the notebook unrunnable. Callers who want a code-env kernel can pass
+    # an explicit kernelspec in `metadata`; run_jupyter_notebook also resolves
+    # and falls back at run time.
     meta = dict(metadata) if metadata else {}
     meta.setdefault("kernelspec", {
-        "display_name": "Python (env DWAS_python)",
+        "display_name": "Python 3",
         "language": "python",
-        "name": "python_env_DWAS_python",
+        "name": "python3",
     })
     meta.setdefault("language_info", {"name": language})
 
@@ -381,7 +386,23 @@ def get_sql_notebook(
             "cell_count": len(content.get("cells", [])),
         }
         if include_history:
-            result["history"] = notebook.get_history().get_raw()
+            # DSSNotebookHistory exposes no get_raw(); it stores the payload
+            # re-indexed as {cell_id: {run_id: run}}. Flatten it back to the
+            # wire shape {cell_id: [run, ...]}. History is best-effort: a
+            # failure here must not sink the whole call.
+            try:
+                history_obj = notebook.get_history()
+                raw = getattr(history_obj, "history", None)
+                if raw is None:
+                    result["history"] = {}
+                else:
+                    result["history"] = {
+                        cell_id: list(query_runs.values())
+                        for cell_id, query_runs in raw.items()
+                    }
+            except Exception as e:
+                result["history"] = None
+                result["history_error"] = f"Failed to read notebook history: {e}"
         return result
     except Exception as e:
         return {

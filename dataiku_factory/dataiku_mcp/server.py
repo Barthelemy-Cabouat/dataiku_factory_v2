@@ -28,6 +28,7 @@ from dataiku_mcp.tools import advanced_scenarios, code_development, project_expl
 from dataiku_mcp.tools import environment_config, monitoring_debug, productivity
 from dataiku_mcp.tools import notebooks, wiki, flow_zones
 from dataiku_mcp.tools import notebook_execution
+from dataiku_mcp.tools import sql_execution
 from dataiku_mcp.tools import discussions
 
 # Register Recipe Tools
@@ -1336,6 +1337,83 @@ def clear_sql_notebook_history(
     """
     return notebooks.clear_sql_notebook_history(
         project_key, notebook_id, cell_id, num_runs_to_retain
+    )
+
+@mcp.tool()
+def execute_sql_notebook(
+    project_key: str,
+    notebook_id: str,
+    cell_index: Optional[int] = None,
+    cell_id: Optional[str] = None,
+    connection: Optional[str] = None,
+    max_rows: int = 1000,
+    stop_on_error: bool = True,
+    max_output_chars: int = 8000,
+) -> Dict[str, Any]:
+    """
+    Execute the query cells of a SQL notebook and return their result sets.
+
+    Runs each `QUERY` cell against the notebook's own DSS connection via the
+    DSS query runner, and returns columns, rows and a rendered text preview per
+    cell. Blank cells, comment-only cells and non-QUERY (e.g. MARKDOWN) cells
+    are reported as skipped. By default every cell runs, top to bottom; pass
+    `cell_index` or `cell_id` to run just one.
+
+    Two behaviours worth knowing: results are NOT written back into the DSS
+    notebook's run history (that payload is not a documented public structure),
+    and a cell containing multiple `;`-separated statements is forwarded as a
+    single statement, since the DSS query endpoint runs one at a time.
+
+    Args:
+        project_key: The project key
+        notebook_id: ID of the SQL notebook (see list_sql_notebooks)
+        cell_index: Zero-based index of a single cell to run
+        cell_id: ID of a single cell to run (takes precedence over cell_index)
+        connection: Override the notebook's connection
+        max_rows: Max rows to return per cell (default 1000); exceeding this
+            sets `truncated` and skips stream verification for that cell
+        stop_on_error: If True (default), skip remaining cells after a failure
+        max_output_chars: Size cap for each cell's rendered text preview
+
+    Returns:
+        Dict with per-cell status, columns, rows, preview and truncation flags,
+        plus counts of executed and failed cells
+    """
+    return sql_execution.execute_sql_notebook(
+        project_key, notebook_id, cell_index, cell_id, connection,
+        max_rows, stop_on_error, max_output_chars,
+    )
+
+@mcp.tool()
+def execute_sql_query(
+    connection: str,
+    query: str,
+    project_key: Optional[str] = None,
+    max_rows: int = 1000,
+    query_type: str = "sql",
+    max_output_chars: int = 8000,
+) -> Dict[str, Any]:
+    """
+    Run a single ad-hoc SQL statement on a DSS connection and return the rows.
+
+    The direct path for exploratory queries — schema discovery, row counts,
+    spot checks — with no notebook needed. For SQL that should be saved and
+    re-run, author a SQL notebook and use execute_sql_notebook instead.
+
+    Args:
+        connection: Name of the DSS connection (see get_connections)
+        query: A single SQL statement; a trailing semicolon is stripped
+        project_key: Optional project context, for user isolation/impersonation
+        max_rows: Max rows to return (default 1000); exceeding this sets
+            `truncated` and skips stream verification
+        query_type: 'sql' (default), 'hive' or 'impala'
+        max_output_chars: Size cap for the rendered text preview
+
+    Returns:
+        Dict with columns, column_types, rows, preview and truncation flags
+    """
+    return sql_execution.execute_sql_query(
+        connection, query, project_key, max_rows, query_type, max_output_chars,
     )
 
 # Register Flow Zone Tools
