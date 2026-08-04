@@ -423,14 +423,19 @@ def inspect_dataset_schema(
     dataset_name: str
 ) -> Dict[str, Any]:
     """
-    Inspect the schema of a dataset.
-    
+    Inspect the schema of a dataset, and where it physically lives.
+
+    For a SQL-backed dataset the result includes a ``location`` block giving the
+    connection and the real catalog/schema/table, plus a ``sql_from`` string
+    ready to use after FROM. The DSS dataset name is rarely the table name, so
+    querying without this generally fails with "relation does not exist".
+
     Args:
         project_key: The project key containing the dataset
         dataset_name: Name of the dataset to inspect
-    
+
     Returns:
-        Dict with dataset schema information or error message
+        Dict with dataset schema information and SQL location, or error message
     """
     try:
         project = get_project(project_key)
@@ -466,6 +471,18 @@ def inspect_dataset_schema(
             
             columns.append(column_info)
         
+        # Resolved lazily to keep the import local: dataset_sql imports from
+        # sql_execution, and a module-level import here would create a cycle.
+        from dataiku_mcp.tools.dataset_sql import resolve_dataset_sql_location
+
+        location = resolve_dataset_sql_location(project_key, dataset_name)
+        if location.get("status") == "error":
+            location = {"status": "unavailable", "message": location.get("message")}
+        else:
+            location.pop("status", None)
+            location.pop("project_key", None)
+            location.pop("dataset_name", None)
+
         return {
             "status": "ok",
             "dataset_name": dataset_name,
@@ -474,6 +491,7 @@ def inspect_dataset_schema(
                 "user_modified": schema.get('userModified', False),
                 "column_count": len(columns)
             },
+            "location": location,
             "message": f"Schema for dataset '{dataset_name}' retrieved successfully"
         }
         

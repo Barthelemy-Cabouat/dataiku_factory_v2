@@ -1,5 +1,6 @@
 """Small compatibility helpers for the Dataiku public API client."""
 
+import re
 from typing import Any, Dict, List, Optional
 
 
@@ -49,18 +50,31 @@ def scenario_raw_settings(scenario: Any) -> Dict[str, Any]:
 
 
 def is_sensitive_name(name: str) -> bool:
-    lowered = name.lower()
+    """
+    True if a settings key looks like it holds a credential.
+
+    Separators are stripped before matching, so ``access_key``, ``accessKey``,
+    ``access-key`` and ``ACCESSKEY`` are all caught by the single fragment
+    ``accesskey``. Matching the underscored spelling alone missed DSS's own
+    camelCase parameter names -- an Azure connection's ``accessKey`` was
+    returned in cleartext while its ``sasToken`` was correctly masked.
+    """
+    normalized = re.sub(r"[^a-z0-9]", "", name.lower())
     sensitive_fragments = (
         "password",
         "passwd",
         "pwd",
+        "passphrase",
         "secret",
         "token",
-        "api_key",
         "apikey",
-        "access_key",
-        "private_key",
+        "accesskey",
+        "secretkey",
+        "privatekey",
+        "sharedkey",
+        "sessionkey",
+        "signature",
         "credential",
         "bearer",
     )
-    return any(fragment in lowered for fragment in sensitive_fragments)
+    return any(fragment in normalized for fragment in sensitive_fragments)

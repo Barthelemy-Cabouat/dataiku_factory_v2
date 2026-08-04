@@ -1,6 +1,6 @@
 # Dataiku Factory - MCP Tool Suite
 
-A comprehensive Model Context Protocol (MCP) tool suite for Dataiku DSS integration. It exposes **67 tools** covering recipes, datasets, scenarios, jobs, Jupyter and SQL notebooks, wiki articles, flow zones and discussions — usable from Claude Code, Codex, or as a **Local MCP tool inside Dataiku DSS itself**.
+A comprehensive Model Context Protocol (MCP) tool suite for Dataiku DSS integration. It exposes **69 tools** covering recipes, datasets, scenarios, jobs, Jupyter and SQL notebooks, wiki articles, flow zones and discussions — usable from Claude Code, Codex, or as a **Local MCP tool inside Dataiku DSS itself**.
 
 ## 🚀 Quick Start
 
@@ -116,7 +116,7 @@ env:     DSS_HOST=https://your-dss:10000
 
 ## 📚 MCP Tool Catalog
 
-**67 tools.** Safety ratings: 🟢 read-only · 🟡 mutates metadata/objects · 🟠 executes code or consumes compute · 🔴 destructive.
+**69 tools.** Safety ratings: 🟢 read-only · 🟡 mutates metadata/objects · 🟠 executes code or consumes compute · 🔴 destructive.
 
 ### Recipes (7)
 
@@ -130,7 +130,7 @@ env:     DSS_HOST=https://your-dss:10000
 | `validate_recipe_syntax` | 🟢 | `project_key`, `recipe_name`, `code` |
 | `test_recipe_dry_run` | 🟢 | `project_key`, `recipe_name`, `sample_rows` |
 
-### Datasets (7)
+### Datasets (9)
 
 | Tool | Safety | Key Parameters |
 |------|--------|----------------|
@@ -139,8 +139,32 @@ env:     DSS_HOST=https://your-dss:10000
 | `delete_dataset` | 🔴 | `project_key`, `dataset_name`, `drop_data` |
 | `build_dataset` | 🟠 | `project_key`, `dataset_name`, `mode`, `partition` |
 | `inspect_dataset_schema` | 🟢 | `project_key`, `dataset_name` |
+| `resolve_dataset_sql_location` | 🟢 | `project_key`, `dataset_name` |
+| `aggregate_dataset` | 🟢 | `project_key`, `dataset_name`, `aggregations`, `group_by`, `where`, `max_rows` |
 | `check_dataset_metrics` | 🟢 | `project_key`, `dataset_name` |
-| `get_dataset_sample` | 🟢 | `project_key`, `dataset_name`, `rows`, `columns`, `timeout` |
+| `get_dataset_sample` | 🟢 | `project_key`, `dataset_name`, `rows`, `columns`, `timeout`, `max_preview_rows` |
+
+**Aggregates vs. samples.** `get_dataset_sample` reads only the leading rows;
+its statistics describe that slice and not the dataset. On
+`26B_Distribution_AppSheet_View`, a 1,000-row read reported 3.9% nulls in
+`Credit_avec_CET` and a mean of 107,714, while a 5,000-row read of the same
+column reported 21.1% and 112,526 — neither is the dataset's figure. Any total,
+average or count must come from `aggregate_dataset`, which pushes the
+computation into the database and runs it over every row.
+
+`aggregate_dataset` composes SQL from an allowlist (`COUNT`, `COUNT_DISTINCT`,
+`SUM`, `AVG`, `MIN`, `MAX`, `STDDEV`) and validates every column name against
+the dataset's schema, so it is safe to enable for an agent that is *not*
+permitted to run `execute_sql_query`. Its one raw-SQL surface is the optional
+`where` argument, which is forwarded verbatim — leave it unused for untrusted
+callers. Results always carry `total_row_count` and a `<column>__non_null_count`
+for each aggregated column.
+
+`resolve_dataset_sql_location` answers "which table is this actually?" — a DSS
+dataset name is not the physical table name, and guessing produces
+`relation "..." does not exist`. It expands `${projectKey}`-style variables and
+quotes identifiers for the engine's dialect. The same information is now
+returned in `inspect_dataset_schema` under `location`.
 
 ### Scenarios (9)
 
@@ -231,8 +255,15 @@ env:     DSS_HOST=https://your-dss:10000
 | `get_project_flow` | 🟢 | `project_key` |
 | `search_project_objects` | 🟢 | `project_key`, `search_term`, `object_types` |
 | `get_project_variables` | 🟢 | `project_key` |
-| `get_connections` | 🟢 | `project_key`, `scope` |
+| `get_connections` | 🟢 | `project_key`, `scope`, `include_usage` |
 | `get_code_environments` | 🟢 | `project_key`, `scope` |
+
+**Payload note.** `get_connections` returns per-connection dataset and recipe
+*counts* by default; the full name-by-name inventory arrives only with
+`include_usage=true`. On BURUNDI_BIZOPS (1,065 datasets, 975 recipes) that
+inventory is roughly 50k tokens, and because an agent framework replays the full
+message history on every iteration, a single call re-bills itself on every
+subsequent turn.
 
 ### Productivity (3)
 
@@ -255,10 +286,15 @@ When first wiring this into an agent, enable only:
 
 ```
 get_project_flow, search_project_objects, inspect_dataset_schema,
-get_dataset_sample, get_recipe_code, get_scenario_steps, get_scenario_logs,
+resolve_dataset_sql_location, aggregate_dataset, get_dataset_sample,
+get_recipe_code, get_scenario_steps, get_scenario_logs,
 get_recent_runs, get_job_details, get_job_log, get_connections,
 get_code_environments, list_wiki_articles, get_wiki_article
 ```
+
+`aggregate_dataset` belongs in this set even though it reaches the database:
+without it an agent asked for a total has only `get_dataset_sample`, and will
+answer confidently and wrongly. It is the safe way to say yes to that question.
 
 ## 🔧 Usage Examples
 
@@ -424,7 +460,7 @@ print(len(json.loads(q.get(timeout=30))["result"]["tools"]), "tools")
 p.terminate()
 ```
 
-Expected: a `serverInfo` dict, then `67 tools`.
+Expected: a `serverInfo` dict, then `69 tools`.
 
 ## 🤝 Contributing
 

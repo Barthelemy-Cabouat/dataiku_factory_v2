@@ -33,6 +33,7 @@ from dataiku_mcp.tools import notebooks, wiki, flow_zones
 from dataiku_mcp.tools import notebook_execution
 from dataiku_mcp.tools import sql_execution
 from dataiku_mcp.tools import discussions
+from dataiku_mcp.tools import dataset_sql
 
 # Register Recipe Tools
 @mcp.tool()
@@ -247,16 +248,80 @@ def inspect_dataset_schema(
     dataset_name: str
 ) -> Dict[str, Any]:
     """
-    Get dataset schema information.
-    
+    Get a dataset's columns and, for SQL datasets, its physical table location.
+
+    The returned ``location`` block carries the connection and the real
+    catalog/schema/table plus a ready-to-use ``sql_from``. A DSS dataset name is
+    not the table name, so never guess one from it.
+
     Args:
         project_key: The project key
         dataset_name: Name of the dataset
-        
+
     Returns:
-        Dict containing schema information
+        Dict containing schema information and SQL location
     """
     return datasets.inspect_dataset_schema(project_key, dataset_name)
+
+@mcp.tool()
+def resolve_dataset_sql_location(
+    project_key: str,
+    dataset_name: str
+) -> Dict[str, Any]:
+    """
+    Find the physical SQL table behind a DSS dataset.
+
+    Returns the connection and the resolved catalog/schema/table, with
+    ``${projectKey}``-style variables expanded and identifiers quoted for the
+    engine. ``sql_from`` can be pasted directly after FROM. Call this before
+    writing any SQL that references a dataset.
+
+    Args:
+        project_key: The project key
+        dataset_name: Name of the dataset
+
+    Returns:
+        Dict containing the dataset's SQL location
+    """
+    return dataset_sql.resolve_dataset_sql_location(project_key, dataset_name)
+
+@mcp.tool()
+def aggregate_dataset(
+    project_key: str,
+    dataset_name: str,
+    aggregations: List[Any],
+    group_by: Optional[List[str]] = None,
+    where: Optional[str] = None,
+    max_rows: int = 1000
+) -> Dict[str, Any]:
+    """
+    Compute totals, averages and counts over a whole dataset, in the database.
+
+    This is the correct tool for any aggregate figure. get_dataset_sample reads
+    only the leading rows and its statistics do not generalise to the dataset,
+    so a total derived from a sample will be wrong.
+
+    Results always include ``total_row_count`` and a ``<column>__non_null_count``
+    per aggregated column, so a figure can be judged against how many rows fed it.
+
+    Args:
+        project_key: The project key
+        dataset_name: Name of the dataset (the DSS name; the physical table is
+            resolved automatically)
+        aggregations: List of aggregations, each either a string such as
+            "SUM(Credit_avec_CET)" or a dict {"function": "SUM", "column":
+            "Credit_avec_CET", "alias": "total_credit"}. Allowed functions:
+            COUNT, COUNT_DISTINCT, SUM, AVG, MIN, MAX, STDDEV.
+        group_by: Optional list of columns to group by
+        where: Optional raw SQL predicate placed after WHERE
+        max_rows: Max result rows to return (default 1000)
+
+    Returns:
+        Dict containing the aggregated result and the SQL that produced it
+    """
+    return dataset_sql.aggregate_dataset(
+        project_key, dataset_name, aggregations, group_by, where, max_rows
+    )
 
 @mcp.tool()
 def check_dataset_metrics(
@@ -546,27 +611,33 @@ def get_dataset_sample(
     rows: int = 100,
     columns: Optional[List[str]] = None,
     timeout: int = 90,
+    max_preview_rows: int = 20,
 ) -> Dict[str, Any]:
     """
-    Get sample data from datasets.
+    Look at example rows from a dataset to understand its shape and values.
 
-    Reads only the first `rows` rows via a bounded, self-cleaning stream (it no
-    longer scans the whole table or leak server-side read sessions), so it stays
-    fast on large SQL/Snowflake datasets.
+    NOT for totals, averages or counts over a dataset -- it reads only the
+    leading rows, which are often unrepresentative, and any figure derived from
+    them will be wrong. Use aggregate_dataset for those.
+
+    Reads only the first `rows` rows via a bounded, self-cleaning stream, so it
+    stays fast on large SQL/Snowflake datasets. `rows` sets how many rows are
+    scanned for statistics; `max_preview_rows` sets how many are echoed back.
 
     Args:
         project_key: The project key
         dataset_name: Name of the dataset
-        rows: Number of sample rows
+        rows: Number of rows to scan for statistics
         columns: Specific columns to include
         timeout: Max seconds to wait for the backend before aborting (default
             90). Raise it for very large or slow datasets.
+        max_preview_rows: Max rows returned in sample_data (default 20)
 
     Returns:
-        Dict containing sample data and schema
+        Dict containing sample statistics, schema, and a bounded row preview
     """
     return project_exploration.get_dataset_sample(
-        project_key, dataset_name, rows, columns, timeout
+        project_key, dataset_name, rows, columns, timeout, max_preview_rows
     )
 
 # Register Environment Configuration Tools
@@ -612,7 +683,8 @@ def get_project_variables(
 @mcp.tool()
 def get_connections(
     project_key: Optional[str] = None,
-    scope: str = "project"
+    scope: str = "project",
+    include_usage: bool = False
 ) -> Dict[str, Any]:
     """
     List available data connections.
@@ -625,16 +697,22 @@ def get_connections(
     the instance; this requires admin rights and can be slow or hang on
     instances with many connections.
 
+    Per-connection dataset and recipe *names* are omitted by default; counts are
+    always returned in connection_usage_summary. On a large project that
+    inventory runs to tens of thousands of tokens.
+
     Args:
         project_key: Project identifier. With scope="project", filters
             connections down to those used by this project.
         scope: "project" (default, fast/filtered) or "instance"
             (full admin-level instance listing).
+        include_usage: Include the full lists of dataset and recipe names per
+            connection. Off by default; very large on big projects.
 
     Returns:
         Dict containing connection information
     """
-    return environment_config.get_connections(project_key, scope)
+    return environment_config.get_connections(project_key, scope, include_usage)
 
 # Register Monitoring and Debug Tools
 @mcp.tool()

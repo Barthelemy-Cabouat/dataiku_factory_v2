@@ -393,20 +393,34 @@ def get_dataset_sample(
     rows: int = 100,
     columns: Optional[List[str]] = None,
     timeout: int = 90,
+    max_preview_rows: int = 20,
 ) -> Dict[str, Any]:
     """
-    Get sample data from datasets.
+    Get sample data from a dataset, for inspecting shape and typical values.
+
+    NOT for totals. Statistics here describe the first ``rows`` rows only, and
+    the leading rows of a dataset are frequently unrepresentative of the whole:
+    on 26B_Distribution_AppSheet_View, scanning 1,000 rows reports 3.9% nulls in
+    Credit_avec_CET while scanning 5,000 reports 21.1%. For any sum, average or
+    count over a whole dataset, use aggregate_dataset, which computes in the
+    database over every row.
+
+    ``rows`` controls how many rows are *scanned* for statistics;
+    ``max_preview_rows`` controls how many are *returned*. Returning thousands
+    of raw rows floods the caller's context for no analytical gain, so the two
+    are separate.
 
     Args:
         project_key: The project key
         dataset_name: Name of the dataset
-        rows: Number of sample rows
+        rows: Number of rows to scan for statistics
         columns: Specific columns to include (optional)
         timeout: Max seconds to wait for the backend to return rows before
             aborting (default 90). Raise it for very large/slow datasets.
+        max_preview_rows: Max rows echoed back in ``sample_data`` (default 20).
 
     Returns:
-        Dict containing sample data and schema
+        Dict containing sample statistics, schema, and a bounded preview
     """
     try:
         project = get_project(project_key)
@@ -455,13 +469,26 @@ def get_dataset_sample(
             }
         
         # Calculate sample statistics
+        scan_hit_cap = actual_rows >= rows
         sample_stats = {
             "requested_rows": rows,
             "actual_rows": actual_rows,
+            "rows_scanned_for_stats": actual_rows,
+            "scan_hit_requested_limit": scan_hit_cap,
             "requested_columns": len(columns) if columns else len(schema_columns),
             "total_columns": len(schema_columns),
-            "column_names": columns if columns else [col["name"] for col in schema_columns]
+            "column_names": columns if columns else [col["name"] for col in schema_columns],
+            "statistics_scope": (
+                "FIRST %d ROWS ONLY - not the whole dataset. Do not report these "
+                "figures as dataset totals; use aggregate_dataset for that."
+                % actual_rows
+            ),
         }
+        if scan_hit_cap:
+            sample_stats["note"] = (
+                f"The scan stopped at the {rows}-row limit, so the dataset has at "
+                "least this many rows and its true size is unknown from this call."
+            )
         
         # Generate column statistics for numeric columns
         column_stats = []
@@ -521,7 +548,13 @@ def get_dataset_sample(
             "connection": dataset_settings.get_raw().get("params", {}).get("connection", "unknown")
         }
         
-        return {
+        # Statistics above were computed over every scanned row; only the echoed
+        # preview is capped. Returning thousands of raw rows costs the caller a
+        # great deal of context and adds nothing the statistics do not already say.
+        preview_cap = max(0, int(max_preview_rows))
+        preview_rows = sample_data[:preview_cap]
+
+        result = {
             "status": "ok",
             "project_key": project_key,
             "dataset_info": dataset_info,
@@ -531,8 +564,17 @@ def get_dataset_sample(
                 "column_count": len(filtered_schema_columns)
             },
             "column_stats": column_stats,
-            "sample_data": sample_data
+            "sample_data": preview_rows,
+            "sample_data_rows_returned": len(preview_rows),
         }
+        if len(preview_rows) < actual_rows:
+            result["sample_data_truncated"] = True
+            result["sample_data_note"] = (
+                f"Showing {len(preview_rows)} of {actual_rows} scanned rows. "
+                "column_stats covers all scanned rows. Raise max_preview_rows only "
+                "if individual row values are genuinely needed."
+            )
+        return result
         
     except Exception as e:
         return {

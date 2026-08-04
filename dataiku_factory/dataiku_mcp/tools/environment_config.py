@@ -328,7 +328,8 @@ def get_project_variables(
 
 def get_connections(
     project_key: Optional[str] = None,
-    scope: str = "project"
+    scope: str = "project",
+    include_usage: bool = False
 ) -> Dict[str, Any]:
     """
     List available data connections.
@@ -348,11 +349,20 @@ def get_connections(
     Expect this to be slow on instances with many connections and to require
     admin rights.
 
+    ``connection_usage`` -- the per-connection inventory naming every dataset
+    and recipe -- is omitted unless ``include_usage=True``. On a project the
+    size of BURUNDI_BIZOPS (1,065 datasets, 975 recipes) that inventory is tens
+    of thousands of tokens, and an agent framework replays the whole tool result
+    on every subsequent turn, so returning it by default multiplies the cost of
+    one lookup across the rest of the conversation. Counts are always returned.
+
     Args:
         project_key: Project identifier. With scope="project", filters
             connections down to those used by this project.
         scope: "project" (default, fast/filtered) or "instance"
             (full admin-level instance listing).
+        include_usage: Include the full per-connection lists of dataset and
+            recipe names. Off by default; very large on big projects.
 
     Returns:
         Dict containing connection information
@@ -362,6 +372,7 @@ def get_connections(
 
         if scope == "instance":
             return _get_connections_instance_wide(client, project_key)
+
 
         if scope != "project":
             return {
@@ -429,17 +440,36 @@ def get_connections(
         for conn in connections:
             connection_types.setdefault(conn.get("type", "unknown"), []).append(conn["name"])
 
+        # Counts always; the name-by-name inventory only on request.
+        usage_summary = {
+            name: {
+                "dataset_count": len(usage.get("datasets", [])),
+                "recipe_count": len(usage.get("used_by_recipes", [])),
+            }
+            for name, usage in connection_usage.items()
+        }
+
         result.update({
             "project_key": project_key,
             "connections": connections,
             "connection_count": len(connections),
             "connection_types": connection_types,
             "connection_type_count": len(connection_types),
-            "connection_usage": connection_usage,
+            "connection_usage_summary": usage_summary,
             "unique_connections_used": len(connection_usage),
             "total_datasets": total_datasets,
             "total_recipes": total_recipes
         })
+
+        if include_usage:
+            result["connection_usage"] = connection_usage
+        else:
+            result["connection_usage_note"] = (
+                "Per-connection dataset and recipe names omitted to keep this "
+                "response small; counts are in connection_usage_summary. Pass "
+                "include_usage=true to get the full inventory, or use "
+                "search_project_objects to find specific objects."
+            )
 
         return result
 
