@@ -407,7 +407,9 @@ def get_connections(
 
         try:
             project = get_project(project_key)
-            connection_usage, total_datasets, total_recipes = _compute_connection_usage(project)
+            connection_usage, total_datasets, total_recipes = _compute_connection_usage(
+                project, include_recipes=include_usage
+            )
         except Exception as e:
             result["project_connection_error"] = f"Could not get project connection info: {str(e)}"
             return result
@@ -440,14 +442,15 @@ def get_connections(
         for conn in connections:
             connection_types.setdefault(conn.get("type", "unknown"), []).append(conn["name"])
 
-        # Counts always; the name-by-name inventory only on request.
-        usage_summary = {
-            name: {
-                "dataset_count": len(usage.get("datasets", [])),
-                "recipe_count": len(usage.get("used_by_recipes", [])),
-            }
-            for name, usage in connection_usage.items()
-        }
+        # Counts always; the name-by-name inventory only on request. Recipe
+        # counts are reported only when the recipe pass actually ran, so a
+        # skipped walk never masquerades as "zero recipes".
+        usage_summary = {}
+        for name, usage in connection_usage.items():
+            entry = {"dataset_count": len(usage.get("datasets", []))}
+            if include_usage:
+                entry["recipe_count"] = len(usage.get("used_by_recipes", []))
+            usage_summary[name] = entry
 
         result.update({
             "project_key": project_key,
@@ -458,16 +461,18 @@ def get_connections(
             "connection_usage_summary": usage_summary,
             "unique_connections_used": len(connection_usage),
             "total_datasets": total_datasets,
-            "total_recipes": total_recipes
         })
+        if total_recipes is not None:
+            result["total_recipes"] = total_recipes
 
         if include_usage:
             result["connection_usage"] = connection_usage
         else:
             result["connection_usage_note"] = (
-                "Per-connection dataset and recipe names omitted to keep this "
-                "response small; counts are in connection_usage_summary. Pass "
-                "include_usage=true to get the full inventory, or use "
+                "Per-connection dataset and recipe names omitted, and the recipe "
+                "scan skipped, to keep this response small and fast; dataset "
+                "counts are in connection_usage_summary. Pass include_usage=true "
+                "for the full inventory (slow on large projects), or use "
                 "search_project_objects to find specific objects."
             )
 
@@ -480,24 +485,57 @@ def get_connections(
         }
 
 
-def _compute_connection_usage(project) -> tuple:
+def _dataset_connection(project, dataset_item) -> Optional[str]:
+    """
+    Return the connection a dataset sits on, without a per-dataset HTTP call.
+
+    ``list_datasets`` already returns each dataset's serialized definition,
+    ``params`` included, so the connection is normally right there. Only when a
+    DSS version omits it do we pay for ``get_settings()``. Fetching settings for
+    every dataset unconditionally is what made this tool unusable on a
+    thousand-dataset project.
+    """
+    params = item_get(dataset_item, "params")
+    if isinstance(params, dict) and "connection" in params:
+        return params.get("connection") or "default"
+
+    name = item_get(dataset_item, "name")
+    if not name:
+        return None
+    try:
+        raw = project.get_dataset(name).get_settings().get_raw()
+        return (raw.get("params") or {}).get("connection", "default")
+    except Exception:
+        return None
+
+
+def _compute_connection_usage(project, include_recipes: bool = True) -> tuple:
     """
     Determine which connections a project's datasets/recipes reference.
 
-    Uses only project-scoped APIs (list_datasets, list_recipes, dataset
-    settings) -- no admin/instance-wide calls.
+    Uses only project-scoped APIs -- no admin/instance-wide calls.
+
+    ``include_recipes=False`` skips the recipe pass entirely. That pass costs one
+    ``get_definition_and_payload()`` per recipe (975 on BURUNDI_BIZOPS) and
+    exists solely to populate the per-connection ``used_by_recipes`` name lists,
+    which callers do not receive unless they ask for them. Skipping it when they
+    have not is the difference between a request that returns and one that times
+    out.
 
     Returns:
         Tuple of (connection_usage dict, total_datasets, total_recipes)
     """
     connection_usage: Dict[str, Any] = {}
+    dataset_connection: Dict[str, str] = {}
 
     datasets = project.list_datasets()
     for dataset in datasets:
         try:
             dataset_name = item_get(dataset, "name")
-            dataset_params = project.get_dataset(dataset_name).get_settings().get_raw().get("params", {})
-            connection_name = dataset_params.get("connection", "default")
+            connection_name = _dataset_connection(project, dataset)
+            if connection_name is None:
+                continue
+            dataset_connection[dataset_name] = connection_name
 
             usage = connection_usage.setdefault(connection_name, {"datasets": [], "count": 0})
             usage["datasets"].append({
@@ -509,6 +547,9 @@ def _compute_connection_usage(project) -> tuple:
         except Exception:
             continue
 
+    if not include_recipes:
+        return connection_usage, len(datasets), None
+
     recipes = project.list_recipes()
     for recipe in recipes:
         try:
@@ -516,10 +557,11 @@ def _compute_connection_usage(project) -> tuple:
             refs = recipe_io(project.get_recipe(recipe_name))
 
             for dataset_name in refs["inputs"] + refs["outputs"]:
-                try:
-                    dataset_params = project.get_dataset(dataset_name).get_settings().get_raw().get("params", {})
-                    connection_name = dataset_params.get("connection", "default")
-                except Exception:
+                # Resolved from the map built above rather than re-fetched: the
+                # same datasets appear across many recipes, and each lookup used
+                # to be its own round trip.
+                connection_name = dataset_connection.get(dataset_name)
+                if connection_name is None:
                     continue
 
                 if connection_name in connection_usage:
