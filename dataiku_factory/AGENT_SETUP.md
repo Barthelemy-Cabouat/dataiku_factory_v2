@@ -1,60 +1,119 @@
 # Setting up a structured DSS agent
 
-How to configure the Dataiku agent so it answers business questions from a
+End-to-end setup for a Dataiku agent that answers business questions from a
 governed set of definitions rather than inferring them from dataset names.
 
-The architecture is one agent with layered context:
+Written against **DSS 14.7**. Where a UI label may have moved, the function is
+described rather than the exact menu path.
 
-| Layer | Lives in | Cost | Change cadence |
-|---|---|---|---|
-| Identity and rules | Agent description in DSS | Resent every iteration | Rarely |
-| Tool routing | MCP tool description | Resent every iteration | Rarely |
-| Business glossary | `dataiku_mcp/context/*.md`, read on demand | One small tool call | Weekly |
-| The data | DSS datasets via MCP tools | Per query | Constantly |
+---
 
-Only the first two are always in context. The glossary is retrieved when
-needed, which is what lets it grow to hundreds of concepts without inflating
-every turn. An agent framework replays the whole message history on each
-iteration, so anything pinned in the prompt is paid for repeatedly.
+## 0. Prerequisites
 
-## Why a glossary at all
+**Code environment.** Python 3.11+. The Dataiku docs for Local MCP ask for
+`fastmcp>=2.0`; that guidance targets servers launched through `uvx`/`npx`.
+This server is a pip-installed console script that imports `mcp.server.fastmcp`
+from the `mcp` package, so it needs `mcp>=1.2,<2` and **not** `fastmcp`. Do not
+add `fastmcp` back — it is unpinned and can drag `mcp` past the `<2` bound,
+which removes the module `server.py` imports.
 
-"How many clients do we have?" cannot be answered from schemas. BURUNDI_BIZOPS
-contains **32 datasets** whose names begin `VFINERACT_CLIENTS`. Only
-`VFINERACT_CLIENTS_BI` is correct; `..._QC_Final_1`, `..._Duplicates`,
-`..._prepared` and the rest are flow intermediates. Every one of them returns a
-number. None of them errors.
-
-That is the failure mode worth engineering against: not a missing answer, but a
-confident wrong one. Two real traps already captured in the glossary:
-
-- `OAFID` looks like the obvious One Acre Fund client identifier and is **null
-  in all 634,503 rows**. `COUNT_DISTINCT(OAFID)` returns 0 — an agent would
-  report "no clients".
-- The DSS dataset is `VFINERACT_CLIENTS_BI`, but the Snowflake table behind it
-  is `PRODUCTION.CLIENT.VFINERACT_CLIENTS_BU`. Different suffix.
-
-## Step 1 — Deploy the code
-
-The glossary tools ship inside the package. Pin the commit in the code env's
-package list:
+Package list:
 
 ```
+dataiku-api-client
+python-dotenv
 git+https://github.com/Barthelemy-Cabouat/dataiku_factory_v2.git@<sha>#subdirectory=dataiku_factory
 ```
 
-Then run the **code env's own update** — not the container image rebuild under
-Containerized execution. Those are different actions, and only the first touches
-the host venv the Local MCP tool actually executes from. Confirm success in the
-log: pip should write to
+**API key.** Scope it to the projects the agent should reach. Note the two
+identities in play: the Local MCP process runs under the *querying user's* OS
+identity under User Isolation, but every DSS API call it makes uses the
+`DSS_API_KEY` in the tool's environment. The key is what determines which
+projects and connections are reachable, regardless of who is chatting. Never use
+an admin key.
+
+**Licence.** Knowledge Bank Search and semantic retrieval need Advanced LLM
+Mesh. If your instance reports `Advanced LLM Mesh: No`, the glossary-as-files
+approach in this repo is the path that works without it — one reason it was
+built that way.
+
+**Admin permission.** An administrator can disable or restrict creation of
+Local MCP tools in *Administration > Settings > LLM Mesh*. Confirm it is
+permitted before building.
+
+---
+
+## 1. Choose the agent type
+
+DSS 14 offers three:
+
+| Type | What it is | Use when |
+|---|---|---|
+| Simple Visual Agent | One LLM plus tools, free-running loop | Prototyping, low-stakes Q&A |
+| **Structured Visual Agent** | A sequence of blocks with deterministic control | **Recommended here** |
+| Code Agent | Python, full control | Logic the blocks cannot express |
+
+Use a **Structured Visual Agent**. The reason is specific rather than
+stylistic: in a simple agent, "call `lookup_concept` before choosing a dataset"
+is a *request* in the prompt, and the first real trace we captured showed an
+agent ignoring exactly that kind of instruction — it went straight to sampling
+and produced a wrong total. A structured agent lets you make that step
+**mandatory** rather than hoped-for.
+
+Start from a Simple Visual Agent to prove the tools work, then convert.
+
+---
+
+## 2. Create the Local MCP tool
+
+Create a tool of type **Local MCP** and configure the process:
+
+```
+command: /data/dataiku/dss_data/code-envs/python/agent-mcp-trial/bin/dataiku-mcp-server
+args:    (none)
+env:     DSS_HOST=https://your-dss:10000
+         DSS_API_KEY=<scoped key>
+         DSS_INSECURE_TLS=false
+```
+
+There is a **Paste config** button that fills this from a standard MCP JSON
+block, and a **Load tools** button that enumerates what the server exposes.
+
+Four traps, each of which cost real time:
+
+- **Use local, non-containerized execution.** Absolute host paths do not resolve
+  inside a container image; a containerized tool reports
+  `[Errno 2] No such file or directory` for a launcher that plainly exists.
+- **No quotes around the command.** A literal-quoted path produces
+  `No such file or directory: '"/data/..."'`.
+- **The console script is `dataiku-mcp-server`**, not `dataiku-mcp`.
+- **Every tool is disabled by default.** Enable them deliberately (§3).
+
+Press **Load tools** again after every code env update, or DSS keeps serving the
+previous tool list and your new tools never appear.
+
+### Deploying code changes
+
+Pin the commit SHA in the package list, then run the **code env's own update** —
+*not* the image rebuild under Containerized execution. These are different
+actions and only the first touches the host venv the MCP actually runs from. We
+lost an evening to a build that correctly installed the new commit into the
+container image while the venv stayed nine hours stale.
+
+Confirm from the log that pip wrote to
 `/data/dataiku/dss_data/code-envs/python/agent-mcp-trial/lib/python3.11/site-packages`.
+To verify from inside DSS, run the `mcp_env_diagnostic` notebook in DSSTESTBART:
+it prints the installed commit from `direct_url.json` and checks that the new
+modules are present.
 
-Re-fetch the tool descriptor afterwards or the agent keeps offering the old tool
-list.
+Pinning the SHA is not only for reproducibility. With `@main` unchanged and the
+version still `0.1.0`, pip has grounds to skip the reinstall entirely.
 
-## Step 2 — Enable the right tools
+---
 
-Read-only set, plus the two glossary tools:
+## 3. Enable the right tools
+
+Read-only set, plus the glossary:
 
 ```
 lookup_concept, list_concepts,
@@ -67,74 +126,194 @@ list_wiki_articles, get_wiki_article
 ```
 
 Leave every `delete_*` tool, `batch_update_objects` and `cancel_running_jobs`
-disabled. Wrap anything mutating in DSS's **Human approval**.
+disabled. The first captured trace had all of them enabled.
 
 On `execute_sql_query`: it runs arbitrary SQL with whatever the connection's
 credentials permit, including DDL and DML. `aggregate_dataset` covers the
 analytical cases through an allowlist with schema-validated column names, so
-prefer it and leave `execute_sql_query` off unless someone needs ad-hoc SQL and
-the connection is read-only.
+prefer it and leave `execute_sql_query` off unless someone genuinely needs
+ad-hoc SQL against a read-only connection.
 
-## Step 3 — Set the MCP tool description
+Wrap anything mutating in **Human approval**.
 
-Paste `MCP_DESCRIPTION.txt` into the Local MCP tool's description field. It
-covers tool routing and the hard rules about aggregates and dataset naming.
+---
 
-## Step 4 — Set the agent description
+## 4. Build the structured agent
 
-Paste `AGENT_PROMPT.md` into the agent's description, and add this section so
-the agent reaches for the glossary before it reaches for a dataset:
+Blocks, in order. Names match the DSS block palette.
+
+**Routing** — first block. Branch on whether the question concerns data at all.
+Send greetings and meta questions to a plain response; send data questions
+onward. This stops trivial messages from spinning up tool calls.
+
+**Manual and Mandatory Tool Call** — force `lookup_concept` with the user's
+question before any dataset is touched. This is the block that earns the
+structured agent. The glossary stops being advice and becomes a step that
+cannot be skipped.
+
+**Routing** (second) — branch on whether the lookup matched:
+
+- matched → continue to the loop with the agreed dataset, measure and filter
+- no match → ask which dataset is meant, and stop
+
+That second branch is the guardrail. Thirty-two datasets in BURUNDI_BIZOPS begin
+`VFINERACT_CLIENTS`, and a free-running agent will happily pick
+`..._QC_Final_1` and return a confident wrong number rather than an error. See
+the *Conversational Disambiguation* how-to in the DSS docs for the same pattern
+applied more generally.
+
+**Agentic Loop** — the MCP tools, with the glossary entry already in state. Set
+**Exit Conditions** so the loop ends once an aggregate has been computed rather
+than wandering. Our unfixed baseline took six iterations and five LLM calls for
+one question; the fixed path is one `aggregate_dataset` call.
+
+**Context Compression** — worth adding once conversations run long. DSS replays
+the whole message history on every iteration, so an oversized tool result is
+re-billed on every subsequent turn. This is the same failure that made
+`get_connections` cost ~50k tokens four times in a single run.
+
+**Generate Text Output** — final answer. Template it to always carry the dataset
+name, the measure, and the row counts behind the figure.
+
+Other blocks worth knowing: **Delegate to Another Agent** if you later split by
+domain; **Long-Term Memory** for cross-conversation recall; **Reflection** for
+self-check on high-stakes answers; **Parallel** and **For Each** for fan-out.
+
+### Prompts
+
+Paste `MCP_DESCRIPTION.txt` into the Local MCP tool's description, and
+`AGENT_PROMPT.md` into the agent's description, plus:
 
 ```
 ## Business terms
 
 When a question uses a business term rather than naming a dataset - "clients",
-"total credit", "distributions" - call lookup_concept first. It returns the
-agreed dataset, measure and filter, plus known data quality traps.
+"total credit", "distributions" - the glossary lookup has already run and its
+result is in your context. Use the dataset, measure and filter it gives you.
 
 Do not choose a dataset by name similarity. Names in this instance are
 deliberately close: 32 datasets begin VFINERACT_CLIENTS and only one answers
 "how many clients". Picking wrong returns a plausible number, not an error.
 
-If lookup_concept finds nothing, say the term is not defined and ask which
-dataset is meant. Do not fall back to searching for a likely-looking name.
+If the lookup found nothing, say the term is not defined and ask which dataset
+is meant. Do not fall back to searching for a likely-looking name.
 ```
 
-## Step 5 — Verify
+---
 
-Ask the agent "how many clients do we have in Burundi?" and check the trajectory:
+## 5. Test
 
-1. `lookup_concept("number of clients")` — before touching any dataset
-2. `aggregate_dataset` on `VFINERACT_CLIENTS_BI`, `COUNT_DISTINCT(CLIENT_ID)`,
-   filtered to `CLIENTSTATUS = 'Active'`
-3. An answer of **634,481**, citing the dataset
+Use **Agent Chat** to run questions, and **Tracing** to inspect the trajectory —
+that is where you see which tools were called, in what order, with what
+arguments. The raw backend log is also readable and is what we used to diagnose
+the sampling failure.
+
+Three cases:
+
+| Ask | Expect |
+|---|---|
+| "How many clients do we have in Burundi?" | `lookup_concept` first, then `aggregate_dataset` on `VFINERACT_CLIENTS_BI`, `COUNT_DISTINCT(CLIENT_ID)` filtered to `CLIENTSTATUS = 'Active'`, answer **634,481** |
+| "What is the total credit based on Credit_avec_CET?" | One `aggregate_dataset` call, **41,097,314,734** over 532,455 rows, and it should *mention* that only 418,746 rows are non-null |
+| "What's our total revenue?" | Not defined — the agent should say so and ask, not find something plausible |
 
 Failure signs: going straight to `search_project_objects`; landing on a `_QC_`
-or `_prepared` dataset; using `get_dataset_sample` for the count; reporting a
-figure with no dataset named.
+or `_prepared` dataset; using `get_dataset_sample` to compute a figure;
+reporting a number without naming the dataset.
 
-Then try "what's our total revenue?" — a term deliberately not in the glossary.
-The agent should say it is not defined and ask, rather than finding something
-plausible.
+Enable **Agent Interaction Logging** before letting anyone else use it, so you
+have a record of real questions to evaluate against. **Agent Review** and
+**Agent Evaluation** turn those into a regression set.
+
+---
+
+## 6. Publish
+
+**Agent Hub** exposes the agent to business users inside DSS. For the chat
+surfaces in your roadmap, DSS 14 has first-party **Slack Integration** and
+**Microsoft Teams Integration** — start with Slack, since it is supported
+natively and avoids building a bridge. Google Chat and Gmail have no native
+integration and would need the API node plus a custom connector.
+
+Before any of that: deploy to the automation node with a pinned SHA, not
+`@main`. A branch-tracking package spec means the agent's behaviour changes
+whenever someone merges, silently, with no signal that tool descriptors moved.
+
+---
+
+## 7. Troubleshooting
+
+Every one of these was hit during the build.
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `No matching distribution found for fastmcp` | Code env on Python 3.9 | New env on 3.11+; and drop `fastmcp` entirely — this server does not use it |
+| `No recorded image tag for env` | Containerized execution on | Switch the tool to local execution |
+| `[Errno 13] Permission denied` on project lib | User Isolation: `config/` is 0700 `dataiku`, code runs as `dssuser_*` | Do not use the project library; pip-install from Git |
+| `No such file or directory: '"/data/..."'` | Literal quotes in the command field | Remove the quotes |
+| `.../bin/dataiku-mcp` not found | Wrong console script name | Use `dataiku-mcp-server` |
+| `ModuleNotFoundError: No module named 'scripts'` | setuptools flat-layout drops `scripts/` | Entrypoint lives in `dataiku_mcp/cli.py` |
+| `Connection closed` at startup | Something wrote to stdout; stdio reserves it for JSON-RPC | All logging to stderr (`cli.py` forces this) |
+| `SSLError: record layer failure` | HTTPS sent to a plain-HTTP listener on :10000 | Fix the scheme. `DSS_INSECURE_TLS` will not help — that is for cert errors |
+| `NotAuthenticatedException: Unknown API Key` | Key rotated or stale in `.env` | Update the key where the MCP reads it |
+| New tools do not appear | Descriptor cached | Press **Load tools** again |
+| Code changes do not take effect | Image rebuilt, host venv untouched | Run the code env update; verify with `mcp_env_diagnostic` |
+| `relation "X" does not exist` | SQL built from the DSS dataset name | Use `resolve_dataset_sql_location`; `aggregate_dataset` does it for you |
+| Glossary empty but package imports | `context/*.md` not shipped | `[tool.setuptools.package-data]` in `pyproject.toml` |
+
+---
+
+## 8. Security
+
+The API key is the real permission boundary. Every tool acts with that key's
+privileges no matter who is talking to the agent, so scope it to the project and
+prefer read-only connections.
+
+Prompt injection reaches these tools through dataset descriptions, wiki bodies
+and discussion threads — all of which the agent reads and none of which are
+trusted input. A read-only tool set is the reliable mitigation; human approval
+is the second line.
+
+Do not put a PAT in the code env package list. It is visible to anyone with
+admin on that env and lands in build logs. Use DSS-level Git credentials, or
+`git+ssh://` with a read-only deploy key readable by the `dataiku` account.
+
+Rotate anything that has been exposed, and confirm the old key is deleted rather
+than merely replaced.
+
+---
 
 ## Maintaining the glossary
 
-Entries live in `dataiku_mcp/context/`, one file per domain. Format and rules
-are in `_conventions.md` (files starting with `_` are documentation and are not
+Entries live in `dataiku_mcp/context/`, one file per domain; format and rules are
+in `_conventions.md` (files starting with `_` are documentation and are not
 loaded).
 
 Adding a concept is a pull request: write the entry, verify the number against
 the data, set `verified` to today's date. That review step is the point — it is
-where "which dataset means clients" gets decided once by people who know, rather
-than repeatedly and invisibly by a model.
+where "which dataset means clients" gets decided once, by people who know,
+rather than repeatedly and invisibly by a model.
 
-Two constraints worth respecting. Keep entries short, since they enter an
-agent's context. And put the *dataset* name in the entry, never the physical
-table — `resolve_dataset_sql_location` reads that from DSS on demand, and
-hard-coding it means the glossary silently rots when a table moves.
+Keep entries short, since they enter an agent's context. Put the *dataset* name
+in the entry, never the physical table — `resolve_dataset_sql_location` reads
+that from DSS on demand, and hard-coding it means the glossary rots silently
+when a table moves.
 
 Because the files ship inside the package, updating the glossary currently means
-a code env rebuild. If that cadence becomes painful, the alternative is moving
-entries to DSS wiki articles and reading them with the `get_wiki_article` tools
-— editable in the UI with no rebuild, at the cost of losing version control and
-the review gate.
+a code env update. If that cadence becomes painful, move entries to DSS wiki
+articles and read them with the `get_wiki_article` tools — editable in the UI
+with no rebuild, at the cost of version control and the review gate.
+
+---
+
+## Reference
+
+- [AI Agents](https://doc.dataiku.com/dss/latest/agents/index.html)
+- [Structured Visual Agents](https://doc.dataiku.com/dss/latest/agents/structured-visual-agents/index.html)
+- [Blocks](https://doc.dataiku.com/dss/latest/agents/structured-visual-agents/blocks/index.html)
+- [Conversational Disambiguation how-to](https://doc.dataiku.com/dss/latest/agents/structured-visual-agents/how-to/conversational-disambiguation.html)
+- [Local MCP](https://doc.dataiku.com/dss/latest/agents/tools/local-mcp.html)
+- [Human approval](https://doc.dataiku.com/dss/latest/agents/tools/human-approval.html)
+- [Tracing](https://doc.dataiku.com/dss/latest/agents/tracing.html)
+- [Agent Evaluation](https://doc.dataiku.com/dss/latest/agents/evaluation.html)
+- [Slack Integration](https://doc.dataiku.com/dss/latest/agents/slack.html)
+- [User Isolation](https://doc.dataiku.com/dss/latest/user-isolation/index.html)
