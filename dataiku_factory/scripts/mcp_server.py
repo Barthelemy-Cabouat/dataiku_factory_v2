@@ -1,74 +1,22 @@
 #!/usr/bin/env python3
-"""
-MCP Server entrypoint for Dataiku DSS integration.
+"""Local development entrypoint.
+
+Thin shim kept so that ``python scripts/mcp_server.py`` keeps working from a
+source checkout. The real implementation lives in ``dataiku_mcp.cli`` so that
+it is packaged and installed by pip -- see the note in that module.
+
+Prefer the installed console script in any deployed setting:
+
+    dataiku-mcp-server [--transport stdio|sse] [--verbose]
 """
 
 import sys
-import asyncio
-import argparse
-import logging
 from pathlib import Path
 
-# Add the parent directory to the path so we can import our modules
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Allow running directly from a source checkout without installing.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from dataiku_mcp.server import create_server
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-def main():
-    """Main entrypoint for the MCP server."""
-    parser = argparse.ArgumentParser(description="Dataiku MCP Server")
-    parser.add_argument(
-        "--transport",
-        choices=["stdio", "sse"],
-        default="stdio",
-        help="Transport mechanism (default: stdio)"
-    )
-    parser.add_argument(
-        "--host",
-        default="localhost",
-        help="Host for SSE transport (default: localhost)"
-    )
-    parser.add_argument(
-        "--port",
-        type=int,
-        default=8000,
-        help="Port for SSE transport (default: 8000)"
-    )
-    parser.add_argument(
-        "--verbose",
-        "-v",
-        action="store_true",
-        help="Enable verbose logging"
-    )
-    
-    args = parser.parse_args()
-    
-    # Set logging level
-    if args.verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
-    
-    # Create server
-    try:
-        server = create_server()
-        logger.info("Starting Dataiku MCP Server...")
-        
-        # Run server based on transport
-        if args.transport == "stdio":
-            logger.info("Using stdio transport")
-            server.run()
-        elif args.transport == "sse":
-            logger.info(f"Using SSE transport on {args.host}:{args.port}")
-            server.run_sse(host=args.host, port=args.port)
-            
-    except KeyboardInterrupt:
-        logger.info("Server stopped by user")
-    except Exception as e:
-        logger.error(f"Server error: {e}")
-        sys.exit(1)
+from dataiku_mcp.cli import main  # noqa: E402
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

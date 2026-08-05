@@ -62,6 +62,36 @@ def _source_to_str(source: Any) -> str:
     return source or ""
 
 
+def _list_kernel_names(session: requests.Session, host: str) -> List[str]:
+    """Kernel spec names installed on the DSS Jupyter server, default first."""
+    try:
+        r = session.get(host + "/jupyter/api/kernelspecs", timeout=30)
+        if r.status_code >= 300:
+            return []
+        payload = r.json()
+        names = list((payload.get("kernelspecs") or {}).keys())
+        default = payload.get("default")
+        if default in names:
+            names.remove(default)
+            names.insert(0, default)
+        return names
+    except Exception:
+        return []
+
+
+def _pick_fallback_kernel(available: List[str], language: str = "python") -> Optional[str]:
+    """Choose the most plausible substitute kernel for an unavailable one."""
+    if not available:
+        return None
+    # Prefer the stock interpreter, then any kernel matching the language.
+    for preferred in ("python3", "python2", "python"):
+        if preferred in available:
+            return preferred
+    for name in available:
+        if language in name.lower():
+            return name
+    return available[0]
+
 def _ws_connect(host: str, kernel_id: str, client_session: str):
     ws_url = host.replace("https://", "wss://").replace("http://", "ws://")
     ws_url += f"/jupyter/api/kernels/{kernel_id}/channels?session_id={client_session}"
@@ -230,9 +260,45 @@ def run_jupyter_notebook(
         body = {"path": f"{project_key}/{notebook_name}.ipynb", "type": "notebook",
                 "name": notebook_name, "kernel": {"name": kname}}
         r = s.post(host + "/jupyter/api/sessions", json=body, timeout=start_timeout)
+        # The notebook's own kernelspec is frequently a code-env kernel that is
+        # not installed on this instance (e.g. 'python_env_DWAS_python'), which
+        # DSS rejects with HTTP 501. Retry once with an installed kernel rather
+        # than making the caller guess the name.
+        kernel_fallback = None
+        if r.status_code >= 300 and kernel_name is None:
+            available = _list_kernel_names(s, host)
+            substitute = _pick_fallback_kernel(available)
+            if substitute and substitute != kname:
+                body["kernel"] = {"name": substitute}
+                retry = s.post(host + "/jupyter/api/sessions", json=body, timeout=start_timeout)
+                if retry.status_code < 300:
+                    kernel_fallback = (
+                        f"kernel '{kname}' unavailable; fell back to '{substitute}'"
+                    )
+                    kname = substitute
+                    r = retry
+                else:
+                    return {
+                        "status": "error",
+                        "message": (
+                            f"Failed to start kernel session (HTTP {r.status_code}): "
+                            f"{r.text[:300]} | fallback '{substitute}' also failed "
+                            f"(HTTP {retry.status_code}). Installed kernels: "
+                            f"{', '.join(available) or 'none reported'}"
+                        ),
+                    }
+
         if r.status_code >= 300:
-            return {"status": "error",
-                    "message": f"Failed to start kernel session (HTTP {r.status_code}): {r.text[:500]}"}
+            available = _list_kernel_names(s, host)
+            return {
+                "status": "error",
+                "message": (
+                    f"Failed to start kernel session (HTTP {r.status_code}): "
+                    f"{r.text[:500]}"
+                    + (f" | Installed kernels: {', '.join(available)}" if available else "")
+                ),
+            }
+
         sess = r.json()
         session_id = sess["id"]
         kernel_id = sess["kernel"]["id"]
@@ -286,7 +352,7 @@ def run_jupyter_notebook(
 
         executed = [r for r in results if r["status"] not in ("skipped",)]
         n_err = sum(1 for r in results if r["status"] not in ("ok", "skipped"))
-        return {
+        response = {
             "status": "ok" if n_err == 0 else "error",
             "project_key": project_key,
             "notebook_name": notebook_name,
@@ -298,6 +364,10 @@ def run_jupyter_notebook(
             "message": (f"Ran {len(executed)} code cell(s); {n_err} failed."
                         if n_err else f"Ran {len(executed)} code cell(s) successfully."),
         }
+        if kernel_fallback:
+            response["kernel_warning"] = kernel_fallback
+        return response
+
     except Exception as e:
         return {"status": "error",
                 "message": f"Failed to run Jupyter notebook '{notebook_name}': {e}"}

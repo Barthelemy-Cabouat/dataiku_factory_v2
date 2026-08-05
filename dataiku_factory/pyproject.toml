@@ -10,7 +10,9 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "dataiku-api-client==14.0.0",
-    "mcp",
+    # mcp 2.0 removed `mcp.server.fastmcp`, which server.py imports.
+    # Keep this bounded until the server is ported to the 2.x API.
+    "mcp>=1.2,<2",
     "pydantic>=2.0.0",
     "python-dotenv",
     "pyyaml>=6.0",
@@ -26,7 +28,14 @@ dev = [
 ]
 
 [project.scripts]
-dataiku-mcp-server = "scripts.mcp_server:main"
+dataiku-mcp-server = "dataiku_mcp.cli:main"
+
+# Be explicit about what ships. Flat-layout auto-discovery silently drops
+# directories named scripts/, tests/, docs/ ... which previously left the
+# console script pointing at an uninstalled module.
+[tool.setuptools.packages.find]
+include = ["dataiku_mcp*"]
+namespaces = false
 
 [tool.black]
 line-length = 80
