@@ -34,6 +34,49 @@ from dataiku_mcp.tools import notebook_execution
 from dataiku_mcp.tools import sql_execution
 from dataiku_mcp.tools import discussions
 from dataiku_mcp.tools import dataset_sql
+from dataiku_mcp.tools import context as context_tools
+
+# Register Business Glossary Tools
+@mcp.tool()
+def list_concepts(topic: Optional[str] = None) -> Dict[str, Any]:
+    """
+    List the business concepts that have an agreed dataset and definition.
+
+    Cheap index of what the glossary covers: concept names, the phrasings that
+    map to them, and the owning dataset. Call this when you are unsure whether a
+    term is defined, then lookup_concept for the one you need.
+
+    Args:
+        topic: Optionally restrict to one glossary topic (e.g. "clients")
+
+    Returns:
+        Dict containing the concept index
+    """
+    return context_tools.list_concepts(topic)
+
+@mcp.tool()
+def lookup_concept(query: str) -> Dict[str, Any]:
+    """
+    Resolve a business term to its agreed dataset, measure and filter.
+
+    Call this FIRST whenever a question uses a business term rather than naming
+    a dataset -- "number of clients", "total credit", "active farmers". Dataset
+    names alone cannot be trusted to disambiguate: BURUNDI_BIZOPS holds 32
+    datasets starting VFINERACT_CLIENTS, and picking the wrong one returns a
+    plausible but incorrect number rather than an error.
+
+    Entries also record known data quality traps, such as columns that look like
+    the obvious identifier but are entirely null.
+
+    If nothing matches, do not guess a dataset -- ask which one is meant.
+
+    Args:
+        query: Business term or phrasing, e.g. "number of clients"
+
+    Returns:
+        Dict containing the matching glossary entries
+    """
+    return context_tools.lookup_concept(query)
 
 # Register Recipe Tools
 @mcp.tool()

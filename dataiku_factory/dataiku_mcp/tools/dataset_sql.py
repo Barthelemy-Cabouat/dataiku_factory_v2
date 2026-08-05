@@ -411,8 +411,11 @@ def aggregate_dataset(
         ]
 
         # Always report the denominator. The null-rate surprise in a sample is
-        # exactly what makes sampled totals misleading, so make it explicit.
-        select_parts.append(f"COUNT(*) AS {_quote_ident('total_row_count', style)}")
+        # exactly what makes sampled totals misleading, so make it explicit --
+        # unless the caller already asked for COUNT(*), in which case a second
+        # identical column is just noise to read past.
+        if not any(s["column"] == "*" for s in specs):
+            select_parts.append(f"COUNT(*) AS {_quote_ident('total_row_count', style)}")
 
         for spec in specs:
             if spec["column"] == "*":

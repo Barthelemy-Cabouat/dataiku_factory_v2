@@ -37,6 +37,13 @@ dataiku-mcp-server = "dataiku_mcp.cli:main"
 include = ["dataiku_mcp*"]
 namespaces = false
 
+# The glossary is data, not code, so setuptools will not pick it up on its own.
+# Without this the package installs and imports fine and lookup_concept simply
+# returns an empty glossary -- a silent failure, so keep these in step whenever
+# a new context file type is added.
+[tool.setuptools.package-data]
+dataiku_mcp = ["context/*.md"]
+
 [tool.black]
 line-length = 80
 target-version = ['py311']
