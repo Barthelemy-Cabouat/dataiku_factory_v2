@@ -154,9 +154,33 @@ def lookup_concept(query: str) -> Dict[str, Any]:
         def names(e):
             return [e["concept"].lower()] + [a.lower() for a in e["aliases"]]
 
-        exact = [e for e in entries if q in names(e)]
-        partial = [e for e in entries if any(q in n or n in q for n in names(e))]
-        hits = exact or partial
+        def score(e) -> int:
+            """
+            Rank a candidate against the query.
+
+            Word boundaries rather than raw substrings: the alias "FO" for field
+            officer otherwise matches inside "...credit FOr the season", and a
+            spurious hit that outranks the real one is worse than no glossary at
+            all. Longer matched aliases win, so "total credit" beats "credit".
+            """
+            best = 0
+            for n in names(e):
+                if not n:
+                    continue
+                if n == q:
+                    return 10_000
+                if re.search(r"\b" + re.escape(n) + r"\b", q):
+                    best = max(best, len(n))
+                elif len(q) >= 3 and re.search(r"\b" + re.escape(q) + r"\b", n):
+                    best = max(best, len(q))
+            return best
+
+        scored = sorted(
+            ((score(e), e) for e in entries),
+            key=lambda pair: pair[0],
+            reverse=True,
+        )
+        hits = [e for s, e in scored if s > 0]
 
         if not hits:
             return {
