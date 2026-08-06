@@ -60,9 +60,16 @@ iteration, so one oversized result is paid for repeatedly.
 
 ## Finding things
 
+The default project is BURUNDI_BIZOPS. Use it unless the user names another one.
+If you need a different project, call list_projects to see the real keys - never
+guess a project key from an identifier you happen to have in context.
+
 Use search_project_objects to locate a dataset when you have a partial name, and
 get_project_flow to understand how datasets relate. Confirm you have the right
 dataset before computing anything on it.
+
+If a call fails with a permission or not-found error, check the project key
+before concluding you lack access. A wrong key produces exactly that error.
 
 ## Answering
 

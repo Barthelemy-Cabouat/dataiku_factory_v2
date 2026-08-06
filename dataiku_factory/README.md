@@ -1,6 +1,6 @@
 # Dataiku Factory - MCP Tool Suite
 
-A comprehensive Model Context Protocol (MCP) tool suite for Dataiku DSS integration. It exposes **69 tools** covering recipes, datasets, scenarios, jobs, Jupyter and SQL notebooks, wiki articles, flow zones and discussions — usable from Claude Code, Codex, or as a **Local MCP tool inside Dataiku DSS itself**.
+A comprehensive Model Context Protocol (MCP) tool suite for Dataiku DSS integration. It exposes **72 tools** covering recipes, datasets, scenarios, jobs, Jupyter and SQL notebooks, wiki articles, flow zones and discussions — usable from Claude Code, Codex, or as a **Local MCP tool inside Dataiku DSS itself**.
 
 ## 🚀 Quick Start
 
@@ -116,7 +116,26 @@ env:     DSS_HOST=https://your-dss:10000
 
 ## 📚 MCP Tool Catalog
 
-**69 tools.** Safety ratings: 🟢 read-only · 🟡 mutates metadata/objects · 🟠 executes code or consumes compute · 🔴 destructive.
+**72 tools.** Safety ratings: 🟢 read-only · 🟡 mutates metadata/objects · 🟠 executes code or consumes compute · 🔴 destructive.
+
+### Orientation (3)
+
+| Tool | Safety | Key Parameters |
+|------|--------|----------------|
+| `list_projects` | 🟢 | *(none)* |
+| `list_concepts` | 🟢 | `topic` |
+| `lookup_concept` | 🟢 | `query` |
+
+These are the only three tools callable **without** a `project_key`, and that
+matters more than it looks. The other 69 all require one and none of them can
+produce one, so an agent that starts without a project key has no legal first
+move. A Slack-hosted agent asked for "total credit in Burundi" guessed the key
+`e2cf04` — a fragment of its own MCP namespace — then reported that it lacked
+access, because a wrong key fails with exactly the error a missing permission
+would produce.
+
+`lookup_concept` resolves a business term to its agreed dataset, measure and
+filter; see [Business glossary](#business-glossary) below.
 
 ### Recipes (7)
 
@@ -285,12 +304,16 @@ subsequent turn.
 When first wiring this into an agent, enable only:
 
 ```
+list_projects, list_concepts, lookup_concept,
 get_project_flow, search_project_objects, inspect_dataset_schema,
 resolve_dataset_sql_location, aggregate_dataset, get_dataset_sample,
 get_recipe_code, get_scenario_steps, get_scenario_logs,
 get_recent_runs, get_job_details, get_job_log, get_connections,
 get_code_environments, list_wiki_articles, get_wiki_article
 ```
+
+Enable `list_projects` first. Without it the agent's very first tool call is a
+guess, and every downstream failure is misattributed to permissions.
 
 `aggregate_dataset` belongs in this set even though it reaches the database:
 without it an agent asked for a total has only `get_dataset_sample`, and will
@@ -460,7 +483,7 @@ print(len(json.loads(q.get(timeout=30))["result"]["tools"]), "tools")
 p.terminate()
 ```
 
-Expected: a `serverInfo` dict, then `69 tools`.
+Expected: a `serverInfo` dict, then `72 tools`.
 
 ## 🤝 Contributing
 

@@ -8,7 +8,8 @@ import json
 import logging
 import sys
 
-from dataiku_mcp.client import get_client, get_project, list_projects
+from dataiku_mcp.client import get_client, get_project
+from dataiku_mcp.client import list_projects as list_projects_impl
 
 # Configure logging.
 # stdout carries the JSON-RPC frames for the stdio transport, so log output
@@ -35,6 +36,41 @@ from dataiku_mcp.tools import sql_execution
 from dataiku_mcp.tools import discussions
 from dataiku_mcp.tools import dataset_sql
 from dataiku_mcp.tools import context as context_tools
+
+# Register Orientation Tools
+@mcp.tool()
+def list_projects() -> Dict[str, Any]:
+    """
+    List the DSS project keys you can access.
+
+    Call this when you do not already know the project key. Almost every other
+    tool requires one and none of them can discover it, so guessing a key is the
+    single most common way to get stuck: the call fails with a permission or
+    not-found error that looks like a missing access right rather than a wrong
+    argument.
+
+    Project keys are usually uppercase with underscores, e.g. BURUNDI_BIZOPS.
+    Never infer one from a tool name, a hash, or the wording of the question.
+
+    Returns:
+        Dict containing the accessible project keys
+    """
+    try:
+        keys = list_projects_impl()
+        return {
+            "status": "ok",
+            "project_count": len(keys),
+            "project_keys": sorted(keys),
+            "message": (
+                "Pass one of these as project_key. If several look plausible, "
+                "ask which is meant rather than picking one."
+            ),
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Failed to list projects: {e}",
+        }
 
 # Register Business Glossary Tools
 @mcp.tool()
@@ -1639,7 +1675,9 @@ def list_available_projects() -> str:
     Returns:
         JSON string of available projects
     """
-    projects = list_projects()
+    # Use the client helper directly: the module-level name `list_projects` is
+    # now the MCP *tool*, which returns a dict rather than a list of keys.
+    projects = list_projects_impl()
     return json.dumps({"projects": projects})
 
 # Add resource for project info
