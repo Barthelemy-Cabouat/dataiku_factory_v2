@@ -703,6 +703,7 @@ def get_dataset_sample(
     stays fast on large SQL/Snowflake datasets. `rows` sets how many rows are
     scanned for statistics; `max_preview_rows` sets how many are echoed back.
 
+
     Args:
         project_key: The project key
         dataset_name: Name of the dataset

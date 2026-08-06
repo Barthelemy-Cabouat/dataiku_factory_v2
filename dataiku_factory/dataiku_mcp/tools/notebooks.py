@@ -64,6 +64,7 @@ def _jupyter_content(
         "display_name": "Python 3",
         "language": "python",
         "name": "python3",
+
     })
     meta.setdefault("language_info", {"name": language})
 
@@ -403,6 +404,7 @@ def get_sql_notebook(
             except Exception as e:
                 result["history"] = None
                 result["history_error"] = f"Failed to read notebook history: {e}"
+
         return result
     except Exception as e:
         return {

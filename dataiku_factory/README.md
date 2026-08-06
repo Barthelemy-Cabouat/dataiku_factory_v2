@@ -80,40 +80,6 @@ codex mcp add dataiku-factory `
   --env DSS_INSECURE_TLS=true `
   -- C:\path\to\dataiku_factory\.venv\Scripts\dataiku-mcp-server.exe `
      --transport stdio
-```
-
-Verify with `codex mcp list` / `codex mcp get dataiku-factory`.
-
-### Dataiku DSS (Local MCP tool)
-
-DSS 14+ can run this server as a managed **Local MCP** agent tool. Setup notes, in the order they bite:
-
-**1. Create a dedicated code environment**, Python **3.11+**. `fastmcp`/`mcp` requires ≥3.10 and this package requires ≥3.11, so an existing 3.9 env will fail at package resolution.
-
-**2. Install this package into that code env** rather than dropping the repo in the DSS project library. Add to the env's requested packages:
-
-```
-git+https://github.com/<org>/dataiku_factory_v2.git@<commit-sha>#subdirectory=dataiku_factory
-```
-
-Pin the SHA for anything beyond a design-node trial. Code envs resolve packages at **build time**, so tracking a branch means the server changes only when the env is rebuilt — silently, and without a signal that tool descriptors moved.
-
-> **Why not the project library?** With User Isolation enabled, DSS code runs as `dssuser_*`, while `$DIP_HOME/config/` is mode `0700` owned by `dataiku`. The MCP subprocess cannot read the project library at all — you get `[Errno 13] Permission denied`.
-
-**3. Configure the tool** (type: Local MCP):
-
-```
-command: /path/to/dss_data/code-envs/python/<env-name>/bin/dataiku-mcp-server
-args:    (none)
-env:     DSS_HOST=https://your-dss:10000
-         DSS_API_KEY=<scoped key>
-         DSS_INSECURE_TLS=false
-```
-
-**4. Use local (non-containerized) execution.** Absolute host paths do not resolve inside a DSS container image; a containerized tool reports `[Errno 2] No such file or directory` for a launcher that plainly exists on the host.
-
-**5. Enable tools selectively.** All MCP tools are disabled by default in DSS. See the safety ratings in the catalog below, and wrap anything mutating in DSS's **Human approval**.
-
 ## 📚 MCP Tool Catalog
 
 **72 tools.** Safety ratings: 🟢 read-only · 🟡 mutates metadata/objects · 🟠 executes code or consumes compute · 🔴 destructive.
@@ -542,3 +508,7 @@ MIT — see the LICENSE file.
 - Built for [Dataiku DSS](https://www.dataiku.com/)
 - Uses the [Model Context Protocol](https://modelcontextprotocol.io/)
 - Integrated with [Claude Code](https://claude.ai/code)
+
+---
+
+**Ready to enhance your Dataiku workflows with AI assistance!** 🚀

@@ -92,7 +92,6 @@ def _pick_fallback_kernel(available: List[str], language: str = "python") -> Opt
             return name
     return available[0]
 
-
 def _ws_connect(host: str, kernel_id: str, client_session: str):
     ws_url = host.replace("https://", "wss://").replace("http://", "ws://")
     ws_url += f"/jupyter/api/kernels/{kernel_id}/channels?session_id={client_session}"
@@ -261,7 +260,6 @@ def run_jupyter_notebook(
         body = {"path": f"{project_key}/{notebook_name}.ipynb", "type": "notebook",
                 "name": notebook_name, "kernel": {"name": kname}}
         r = s.post(host + "/jupyter/api/sessions", json=body, timeout=start_timeout)
-
         # The notebook's own kernelspec is frequently a code-env kernel that is
         # not installed on this instance (e.g. 'python_env_DWAS_python'), which
         # DSS rejects with HTTP 501. Retry once with an installed kernel rather
@@ -300,6 +298,7 @@ def run_jupyter_notebook(
                     + (f" | Installed kernels: {', '.join(available)}" if available else "")
                 ),
             }
+
         sess = r.json()
         session_id = sess["id"]
         kernel_id = sess["kernel"]["id"]
@@ -368,6 +367,7 @@ def run_jupyter_notebook(
         if kernel_fallback:
             response["kernel_warning"] = kernel_fallback
         return response
+
     except Exception as e:
         return {"status": "error",
                 "message": f"Failed to run Jupyter notebook '{notebook_name}': {e}"}

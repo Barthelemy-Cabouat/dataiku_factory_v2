@@ -410,6 +410,7 @@ def get_dataset_sample(
     of raw rows floods the caller's context for no analytical gain, so the two
     are separate.
 
+
     Args:
         project_key: The project key
         dataset_name: Name of the dataset

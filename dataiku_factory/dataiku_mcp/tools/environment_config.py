@@ -364,6 +364,7 @@ def get_connections(
         include_usage: Include the full per-connection lists of dataset and
             recipe names. Off by default; very large on big projects.
 
+
     Returns:
         Dict containing connection information
     """
@@ -372,7 +373,6 @@ def get_connections(
 
         if scope == "instance":
             return _get_connections_instance_wide(client, project_key)
-
 
         if scope != "project":
             return {
@@ -410,6 +410,7 @@ def get_connections(
             connection_usage, total_datasets, total_recipes = _compute_connection_usage(
                 project, include_recipes=include_usage
             )
+
         except Exception as e:
             result["project_connection_error"] = f"Could not get project connection info: {str(e)}"
             return result
@@ -452,6 +453,7 @@ def get_connections(
                 entry["recipe_count"] = len(usage.get("used_by_recipes", []))
             usage_summary[name] = entry
 
+
         result.update({
             "project_key": project_key,
             "connections": connections,
@@ -475,6 +477,7 @@ def get_connections(
                 "for the full inventory (slow on large projects), or use "
                 "search_project_objects to find specific objects."
             )
+
 
         return result
 
@@ -524,6 +527,10 @@ def _compute_connection_usage(project, include_recipes: bool = True) -> tuple:
 
     Returns:
         Tuple of (connection_usage dict, total_datasets, total_recipes)
+
+
+    Returns:
+        Tuple of (connection_usage dict, total_datasets, total_recipes)
     """
     connection_usage: Dict[str, Any] = {}
     dataset_connection: Dict[str, str] = {}
@@ -536,6 +543,7 @@ def _compute_connection_usage(project, include_recipes: bool = True) -> tuple:
             if connection_name is None:
                 continue
             dataset_connection[dataset_name] = connection_name
+
 
             usage = connection_usage.setdefault(connection_name, {"datasets": [], "count": 0})
             usage["datasets"].append({
@@ -550,6 +558,7 @@ def _compute_connection_usage(project, include_recipes: bool = True) -> tuple:
     if not include_recipes:
         return connection_usage, len(datasets), None
 
+
     recipes = project.list_recipes()
     for recipe in recipes:
         try:
@@ -562,6 +571,8 @@ def _compute_connection_usage(project, include_recipes: bool = True) -> tuple:
                 # to be its own round trip.
                 connection_name = dataset_connection.get(dataset_name)
                 if connection_name is None:
+                    continue
+
                     continue
 
                 if connection_name in connection_usage:
