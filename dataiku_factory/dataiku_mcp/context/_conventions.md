@@ -18,8 +18,41 @@ Prose notes go here: caveats, lookalike datasets to avoid, known data quality
 issues, who owns the definition.
 ```
 
+## Two kinds of entry
+
+Most entries are **measure entries**: a business term resolved to a dataset, a
+measure and a filter, as above. They answer "what number is this".
+
+A few are **vocabulary entries**: a term the agent must understand to read the
+question at all, but which no single dataset answers. Season codes, field
+roles, team acronyms, source system names. They carry `kind: vocabulary` and
+omit `dataset` and `measure`. They live in `seasons.md`, `organisation.md` and
+`systems.md`.
+
+```
+## season code
+kind: vocabulary
+aliases: season, saison, 26A, 26B, what season, which season
+verified: 2026-08-06
+Prose explaining the term and, crucially, what it stops the agent doing —
+here, that no dataset is season-agnostic so a question naming no season
+cannot be answered without asking.
+```
+
+A vocabulary entry earns its place by preventing a wrong answer, not by being
+a definition. If the entry does not change what the agent would do, leave it
+out. The useful ones say "this term is ambiguous, ask which", "this number
+means something different from the one you'd reach for", or "this acronym
+names a team whose figures legitimately differ from another team's".
+
+Mark inferred expansions as inferred. `AFD` and `RBM` are written down in
+`organisation.md` with the expansion flagged as probable, because the source
+documents use the acronym without ever expanding it. An agent that states an
+unverified expansion as fact in a report to the field will be wrong in public.
+
 ## Recognised fields
 
+- `kind` — `vocabulary` for entries with no dataset. Omit for measure entries.
 - `aliases` — comma-separated. The phrasings a user actually types. This is what
   makes lookup work, so be generous and include the sloppy ones.
 - `project` — DSS project key.
@@ -50,3 +83,19 @@ and let the tooling resolve it.
 
 Keep one concept per entry. If a phrase has two legitimate meanings, write two
 entries and say in each how it differs from the other.
+
+Say when a measure needs SQL. `aggregate_dataset` takes plain column names
+only, so any measure that is an expression — `SUM(a - b)`, a filter comparing
+two columns — has to go through `execute_sql_query`. Underpayment and
+overpayment are both like this. An entry whose `measure` line cannot be pasted
+into `aggregate_dataset` must say so, or the agent will try and fail.
+
+Name the season. Nearly every dataset here is one season wide, with the season
+in the dataset name, the column name or the project key. An entry that does not
+state which season it covers will be applied to the wrong one.
+
+Distinguish the dataset figure from the published figure. Dashboard numbers
+have usually had claims corrections and prior-season overpayment offsets
+applied; the raw dataset has not. Where the two differ materially — 26A
+underpayment is 4.6Bn in the data and 778M on the dashboard — say so in the
+entry and say which basis was used when reporting.
