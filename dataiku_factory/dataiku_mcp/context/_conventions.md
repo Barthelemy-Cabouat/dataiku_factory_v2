@@ -69,6 +69,20 @@ State the grain whenever a dataset could be misread as one-row-per-something-els
 Most wrong answers come from a plausible dataset at the wrong grain, not from a
 missing dataset.
 
+Check the grain against the data, not against the dataset name. Compare
+`COUNT(*)` to `COUNT_DISTINCT(<the entity key>)`. If they differ, the dataset
+is not one row per entity, and **some of its columns will be repeated across
+the rows rather than split across them**. Summing a repeated column
+double-counts. On `26A_Credit_DistrRepaymentMultiS` credit is split and
+repayment is repeated, so `SUM` is right for one and wrong for the other on the
+same table — a distinction no dataset name will ever tell you. Where a measure
+needs a per-entity rollup before it is aggregated, say so in the entry.
+
+Entries do not compose. Two verified entries cannot be combined into a third by
+an agent, because the join key, the grain and the treatment of zero-versus-null
+are exactly what verification settled and none of them survive being inferred.
+A question that crosses two entries needs its own entry.
+
 Name the lookalikes. If a concept has thirty near-identically named datasets
 beside it, list the ones to avoid and say why. The agent cannot tell
 `VFINERACT_CLIENTS_BI` from `VFINERACT_CLIENTS_BI_QC_Final_1` without help, and

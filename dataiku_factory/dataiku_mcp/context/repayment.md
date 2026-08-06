@@ -4,11 +4,31 @@
 aliases: total repaid, repayments, remboursement, total repayment, how much have farmers repaid, montant remboursé
 project: BURUNDI_BIZOPS
 dataset: 26A_Credit_DistrRepaymentMultiS
-measure: SUM(Repayment26A)
-grain: one row per farmer account for season 26A
+measure: SUM of MAX(Repayment26A) per AccountID — see the warning below
+grain: one row per farmer per credit line, NOT one row per farmer
 verified: 2026-08-06
-The season-26A repayment total. As of 2026-08-06: 50,293,053,526 BIF across
-494,952 rows, no nulls.
+The season-26A repayment total. As of 2026-08-06: **50,166,121,316 BIF** over
+493,113 accounts.
+
+**`SUM(Repayment26A)` is wrong and overstates by 126,932,210 BIF.** The dataset
+is not one row per farmer. 1,836 accounts carry more than one row, and on every
+one of them `Repayment26A` is the *same value repeated on each row* — the
+signature of a join that fanned repayment out across credit lines. Summing it
+counts those farmers' repayments two or more times.
+
+`Total_Credit_CET` behaves the opposite way: it is genuinely split across the
+rows, so summing credit is correct while summing repayment is not. Account
+18824779 shows both at once — credit 167,450 and 38,000 on two rows, repayment
+188,400 printed on both.
+
+Aggregate to `AccountID` first, taking `MAX(Repayment26A)` and
+`SUM(Total_Credit_CET)`, then total. `aggregate_dataset` cannot express this;
+use `execute_sql_query` on connection `Development` with `project_key`
+`BURUNDI_BIZOPS`.
+
+The error is 0.25% on the headline and much larger on the affected accounts, so
+it will not show up in a sanity check but will put individual farmers in the
+wrong bucket.
 
 This dataset is the per-farmer credit-and-repayment view for **26A only**. The
 season is baked into the column names (`Credit_26A`, `Repayment26A`), so it
@@ -32,9 +52,14 @@ aliases: 26A credit, credit 26A, total credit 26A, crédit 26A
 project: BURUNDI_BIZOPS
 dataset: 26A_Credit_DistrRepaymentMultiS
 measure: SUM(Total_Credit_CET)
-grain: one row per farmer account for season 26A
+grain: one row per farmer per credit line, NOT one row per farmer
 verified: 2026-08-06
-The headline 26A credit figure. As of 2026-08-06: 50,965,187,549 BIF.
+The headline 26A credit figure. As of 2026-08-06: 50,965,187,549 BIF over
+494,952 rows and 493,113 accounts.
+
+Credit is split across a farmer's rows, so a plain `SUM` is right here — unlike
+`Repayment26A` on the same dataset, which is repeated per row and must not be
+summed. See "total repaid".
 
 `Total_Credit_CET` is exactly `Credit_26A + Multisaison + CET`, checked
 against the data on 2026-08-06, and BizOps reporting quotes that split:
@@ -48,10 +73,14 @@ seasons and will never reconcile.
 aliases: repayment rate, taux de remboursement, % repaid, repayment performance, how are repayments going
 project: BURUNDI_BIZOPS
 dataset: 26A_Credit_DistrRepaymentMultiS
-measure: SUM(Repayment26A) / SUM(Total_Credit_CET)
-grain: one row per farmer account for season 26A
+measure: total repaid / total credit, both aggregated to AccountID first
+grain: one row per farmer per credit line, NOT one row per farmer
 verified: 2026-08-06
-Computed, not stored. On 2026-08-06 this gives 98.7% for 26A.
+Computed, not stored. On 2026-08-06 this gives **98.43%** for 26A.
+
+Taking `SUM(Repayment26A) / SUM(Total_Credit_CET)` straight off the rows gives
+98.68%, because the numerator double-counts 1,836 farmers — see "total repaid".
+Deduplicate to account level first.
 
 Two caveats that matter more than the arithmetic. First, **the published rate
 includes overpayments**, so it can exceed 100% at group or district level —
@@ -70,12 +99,18 @@ view). The row populations differ.
 aliases: underpayment, underpayments, sous-paiement, outstanding, arrears, who still owes, montant restant
 project: BURUNDI_BIZOPS
 dataset: 26A_Credit_DistrRepaymentMultiS
-measure: SUM(Total_Credit_CET - Repayment26A) where Repayment26A < Total_Credit_CET
-grain: one row per farmer account for season 26A
+measure: per account, credit - repaid, summed where positive
+grain: one row per farmer per credit line, NOT one row per farmer
 verified: 2026-08-06
 Credit not yet repaid, summed over **only the farmers who are short**.
 Overpaying farmers must not cancel out underpaying ones. On 2026-08-06 for
-26A: 4,630,107,152 BIF across 150,089 farmer accounts in 5,241 groups.
+26A: **4,681,286,747 BIF across 150,893 accounts in 5,595 groups.**
+
+Aggregate to `AccountID` before comparing. Compared row by row, a farmer with
+two credit lines has their full repayment tested against each partial credit
+line, so both rows can read as overpayment when the account is actually short.
+This is not a rounding difference — it moves individual farmers between the
+underpaid and overpaid buckets.
 
 Netting the two sides instead — `SUM(Total_Credit_CET) - SUM(Repayment26A)`
 over all rows — gives about 672M BIF. That is a different quantity, and
@@ -105,32 +140,36 @@ present a dataset number as if it were the dashboard number.
 aliases: high risk farmers, high-risk underpayment, big underpayments, farmers owing more than 50k
 project: BURUNDI_BIZOPS
 dataset: 26A_Credit_DistrRepaymentMultiS
-measure: COUNT_DISTINCT(AccountID) where Total_Credit_CET - Repayment26A > 50000
-grain: one row per farmer account for season 26A
+measure: count of accounts where credit - repaid > 50000, aggregated to AccountID first
+grain: one row per farmer per credit line, NOT one row per farmer
 verified: 2026-08-06
 BizOps uses a fixed BIF 50,000 threshold to define a high-risk case. The
 threshold is a reporting convention, not a property of the data — if someone
 asks for "high risk" without naming a number, use 50,000 and say so.
 
-On 2026-08-06 the 26A dataset holds 26,841 such accounts carrying
-2,494,892,503 BIF, i.e. 54% of all underpayment exposure sits in 18% of the
+On 2026-08-06 the 26A dataset holds **27,374 such accounts carrying
+2,549,823,664 BIF** — 54% of all underpayment exposure sitting in 18% of the
 short accounts. The dashboard quotes about 14K farmers and the 25B report
 quoted 5K farmers with BIF 562.5M — again the dashboard is post-corrections
 and post-offsets, so expect it to be lower.
 
 Needs `execute_sql_query`; `aggregate_dataset` cannot take an expression in
-its `where`.
+its `where`, nor the per-account rollup this requires.
 
 ## overpayment
 aliases: overpayment, overpayments, surpaiement, overpaid, paid too much, prepayment
 project: BURUNDI_BIZOPS
 dataset: 26A_Credit_DistrRepaymentMultiS
-measure: SUM(Repayment26A - Total_Credit_CET) where Repayment26A > Total_Credit_CET
-grain: one row per farmer account for season 26A
+measure: per account, repaid - credit, summed where positive
+grain: one row per farmer per credit line, NOT one row per farmer
 verified: 2026-08-06
 Money received beyond what a farmer owed. On 2026-08-06 for 26A:
-3,957,973,129 BIF across 192,868 farmer accounts — comparable in size to the
+**3,882,220,514 BIF across 192,069 accounts** — comparable in size to the
 underpayment, and the reason repayment rates can print above 100%.
+
+Aggregate to `AccountID` first, for the same reason as underpayment: row-level
+comparison inflates this by counting multi-line farmers as overpaid on each
+line.
 
 Overpayments are carried forward and offset against the next season's
 underpayment, which is why underpayment gets reported both gross and net of
@@ -146,9 +185,12 @@ credited to the collection account as prepayments — the description on
 aliases: repayment by district, repayment by site, repayment per colline, who is behind on repayment
 project: BURUNDI_BIZOPS
 dataset: 26A_Credit_DistrRepaymentMultiS
-measure: SUM(Repayment26A)
-grain: one row per farmer account for season 26A
+measure: repaid per account, rolled up to the district
+grain: one row per farmer per credit line, NOT one row per farmer
 verified: 2026-08-06
+Deduplicate to `AccountID` before grouping, per "total repaid" — otherwise the
+1,836 multi-line farmers inflate whichever district they sit in.
+
 Group by `DISTRICT_NAME` (62 distinct values) or `SITE_NAME_CLEAN`. The raw
 `districtPP` / `sitePP` / `groupPP` columns are the un-cleaned originals from
 the source sheet; `groupPP_cleaned` and `SITE_NAME_CLEAN` are the cleaned
