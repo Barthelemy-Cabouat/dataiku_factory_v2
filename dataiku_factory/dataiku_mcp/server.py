@@ -2014,11 +2014,45 @@ READONLY_TOOLSET = {
 }
 
 
+# The tools a Slack data consumer actually uses, and nothing else. Every tool
+# costs ~230 prompt tokens of schema on EVERY loop call, so this set is the
+# main cost lever available without provider-side prompt caching (which DSS
+# 14.7 does not expose -- it only accounts for cached tokens when a provider
+# reports them). Dropped versus readonly: agent observability, notebook and
+# SQL-notebook reads, wiki, zones, discussions, project config export.
+MINIMAL_TOOLSET = {
+    # orientation & glossary -- the mandatory first move
+    "list_projects", "list_concepts", "lookup_concept",
+    # figures
+    "aggregate_dataset", "count_entities",
+    # understanding a dataset before trusting a figure
+    "inspect_dataset_schema", "resolve_dataset_sql_location",
+    "get_dataset_sample", "check_dataset_metrics",
+    # finding things
+    "search_project_objects", "get_project_flow",
+    # "why is this number stale / why did the pipeline fail"
+    "get_recent_runs", "get_job_activities", "get_job_log",
+}
+
+_TOOLSETS = {
+    "readonly": READONLY_TOOLSET,
+    "minimal": MINIMAL_TOOLSET,
+}
+
+
 def _apply_toolset_gate() -> None:
     mode = os.environ.get("DATAIKU_MCP_TOOLSET", "full").strip().lower()
-    if mode != "readonly":
+    if mode == "full":
         return
-    allowed = set(READONLY_TOOLSET)
+    if mode not in _TOOLSETS:
+        # Fail CLOSED on a typo: silently serving 83 tools because someone
+        # wrote "read-only" or "readOnly" is exactly the failure this gate
+        # exists to prevent.
+        raise RuntimeError(
+            f"DATAIKU_MCP_TOOLSET={mode!r} is not a known toolset. "
+            f"Valid values: full, {', '.join(sorted(_TOOLSETS))}."
+        )
+    allowed = set(_TOOLSETS[mode])
     # With a connection allowlist in force, ad-hoc SQL is admissible even in
     # readonly mode: sql_execution refuses any connection outside
     # DATAIKU_MCP_SQL_CONNECTIONS, and those connections are expected to carry
@@ -2032,8 +2066,8 @@ def _apply_toolset_gate() -> None:
         for name in removed:
             del registry[name]
         logging.getLogger(__name__).info(
-            "DATAIKU_MCP_TOOLSET=readonly: serving %d tools, removed %d",
-            len(registry), len(removed),
+            "DATAIKU_MCP_TOOLSET=%s: serving %d tools, removed %d",
+            mode, len(registry), len(removed),
         )
     except AttributeError:
         # Fail CLOSED: a gate that silently serves everything is worse than a
