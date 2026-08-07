@@ -40,6 +40,33 @@ from dataiku_mcp.tools import context as context_tools
 from dataiku_mcp.tools import llm_cost
 from dataiku_mcp.tools import agents as agent_tools
 
+def _installed_revision() -> Optional[str]:
+    """
+    The git commit this package was installed from, or None.
+
+    pip writes ``direct_url.json`` beside the dist-info for any VCS install, so
+    the running code can name its own commit. Deploying through a code env
+    gives no other in-band signal: an update can report success having
+    installed the same commit, a stale commit, or nothing at all, and the only
+    way we ever caught it was a diagnostic notebook. Surfacing this in a tool
+    result means every agent trace records what was actually serving.
+    """
+    try:
+        import importlib.metadata as md
+
+        dist = md.distribution("dataiku-mcp")
+        direct_url = os.path.join(str(dist._path), "direct_url.json")
+        if os.path.exists(direct_url):
+            with open(direct_url) as fh:
+                return ((json.load(fh) or {}).get("vcs_info") or {}).get("commit_id")
+    except Exception:
+        pass
+    return None
+
+
+_REVISION = _installed_revision()
+
+
 # Register Orientation Tools
 @mcp.tool()
 def list_projects() -> Dict[str, Any]:
@@ -64,6 +91,10 @@ def list_projects() -> Dict[str, Any]:
             "status": "ok",
             "project_count": len(keys),
             "project_keys": sorted(keys),
+            # Deployment fingerprint, not for the model's reasoning: it tells a
+            # human reading the trace exactly which build answered.
+            "server_commit": (_REVISION or "unknown")[:12],
+            "server_toolset": os.environ.get("DATAIKU_MCP_TOOLSET", "full"),
             "message": (
                 "Pass one of these as project_key. If several look plausible, "
                 "ask which is meant rather than picking one."
@@ -2066,8 +2097,8 @@ def _apply_toolset_gate() -> None:
         for name in removed:
             del registry[name]
         logging.getLogger(__name__).info(
-            "DATAIKU_MCP_TOOLSET=%s: serving %d tools, removed %d",
-            mode, len(registry), len(removed),
+            "DATAIKU_MCP_TOOLSET=%s: serving %d tools, removed %d (commit %s)",
+            mode, len(registry), len(removed), (_REVISION or "unknown")[:12],
         )
     except AttributeError:
         # Fail CLOSED: a gate that silently serves everything is worse than a
@@ -2081,5 +2112,12 @@ def _apply_toolset_gate() -> None:
 
 def create_server():
     """Create and configure the MCP server."""
+    # Always announce the build, gated or not -- "which commit is running?" was
+    # the question that cost the most time on this project.
+    logging.getLogger(__name__).info(
+        "dataiku-mcp starting: commit=%s toolset=%s",
+        (_REVISION or "unknown")[:12],
+        os.environ.get("DATAIKU_MCP_TOOLSET", "full"),
+    )
     _apply_toolset_gate()
     return mcp

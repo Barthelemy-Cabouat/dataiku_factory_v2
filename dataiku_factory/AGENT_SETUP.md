@@ -92,6 +92,37 @@ Four traps, each of which cost real time:
 Press **Load tools** again after every code env update, or DSS keeps serving the
 previous tool list and your new tools never appear.
 
+### Deploying code changes — the reliable recipe
+
+Code env deployment gives no in-band signal that it worked, which is how a
+build once sat nine hours stale while every screen said success. Two habits
+remove the guesswork.
+
+**Always pin the SHA, and always change it.** An unchanged requirement string
+lets pip decide nothing needs doing; a changed one leaves it no choice. The
+version is also bumped per release as a second signal, so even `@main` forces
+an upgrade.
+
+**Verify from the running server, not the config.** Two ground-truth checks,
+both cheap:
+
+| Question | Where to look | Answer |
+|---|---|---|
+| Which commit is serving? | `list_projects` → `server_commit` | 12-char SHA |
+| Which toolset is active? | `list_projects` → `server_toolset`, or the tool's `subtool_count` | `minimal` = 14, `readonly` = 43, `full` = 83 |
+
+Both are also written to stderr at startup:
+`dataiku-mcp starting: commit=24efe1b86548 toolset=minimal`.
+
+A deployment is done when `server_commit` matches the SHA you pinned. Until
+then it has not landed, whatever the code env screen says.
+
+**Order matters when the gate changes.** A build only knows the toolset names
+present in its own code. Deploy first, switch the env var second — setting
+`minimal` against a build that predates it will either serve everything
+(builds before `24efe1b`) or refuse to start (builds after). Both are worse
+than waiting.
+
 ### Deploying code changes
 
 Pin the commit SHA in the package list, then run the **code env's own update** —
