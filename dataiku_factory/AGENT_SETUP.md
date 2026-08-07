@@ -179,6 +179,44 @@ Other blocks worth knowing: **Delegate to Another Agent** if you later split by
 domain; **Long-Term Memory** for cross-conversation recall; **Reflection** for
 self-check on high-stakes answers; **Parallel** and **For Each** for fan-out.
 
+### Wire format (building the graph via the API)
+
+Learned empirically on DSS 14.7 by PUT-and-read-back against
+`/projects/<key>/agents/<id>` — the UI names do not match the JSON:
+
+- Block types: the "Agentic Loop" is `CORE_LOOP`; "Generate Text Output" that
+  *calls an LLM* is `LLM_REQUEST` — `GENERATE_OUTPUT` is a CEL *template*
+  block and silently drops `llmId`/prompt fields. Full legal list (from the
+  API's own rejection message): `CONTEXT_COMPRESSION, ROUTING, GENERATE_OUTPUT,
+  CORE_LOOP, STANDARD_REACT, SET_STATE_ENTRIES, SET_SCRATCHPAD_ENTRIES,
+  LLM_REQUEST, FOR_EACH, REFLECTION, DELEGATE_TO_OTHER_AGENT,
+  MANDATORY_TOOL_CALL, EMIT_OUTPUT, CUSTOM, GENERATE_ARTIFACT, PYTHON_CODE,
+  EDIT_LAST_USER_MESSAGE, MANUAL_TOOL_CALL, PARALLEL`.
+- **Blocks do not chain by array order.** Every block needs an explicit
+  `nextBlock`, or the turn ends after it. This is exactly why the original
+  stub returned nothing.
+- **A routing clause prompt is the entire protocol.** DSS sends the clause
+  text as system messages around the history with no added instructions; a
+  descriptive clause ("the question concerns data") makes the model answer
+  the question in prose and the EXACT matcher then falls through to the
+  default. Write clauses as strict classifiers: "Reply with exactly true …
+  exactly false … no other words."
+- Instruction slots are `systemPromptBeforeHistory` / `systemPromptAfterHistory`
+  on `LLM_REQUEST`, `CORE_LOOP` and routing clauses. `MANDATORY_TOOL_CALL`
+  takes plain `systemPrompt`, and pins its subtool via `tool.subtoolName`.
+- `CORE_LOOP` defaults `passConversationHistory` to **false** — set it true or
+  the loop cannot see the question. `exitConditions: []` and
+  `maxLoopIterations` are its caps.
+- Unknown *fields* are dropped silently; unknown *types* reject the whole PUT
+  (atomically — nothing saves). The discovery loop is therefore safe: PUT best
+  guess, GET back, keep what survived.
+
+Verified working graph, ~$0.13/question: `Routing` (strict-classifier clause →
+`Glossary lookup`, defaultNextBlock → `Direct answer` [LLM_REQUEST]) →
+`Glossary lookup` (MANDATORY_TOOL_CALL, subtoolName `lookup_concept`,
+nextBlock `Answer loop`) → `Answer loop` (CORE_LOOP, MCP tool, history on,
+maxLoopIterations 8).
+
 ### Prompts
 
 Paste `MCP_DESCRIPTION.txt` into the Local MCP tool's description, and
