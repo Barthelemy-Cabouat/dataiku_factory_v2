@@ -1,0 +1,254 @@
+# Burundi BizOps semantic model
+# Built from: BI Systems meeting notes (May–Aug 2026, read in full),
+# Bizops CDM & CE sync notes (Jul 2025–Jun 2026), Réunion des SFDs 2026 A&B,
+# Bizops Structure 2026, BIZOPS OKRs 2025, plus the verified measure glossary
+# in ../*.md. Every claim below carries its evidence source.
+#
+# Purpose: give an LLM agent (and DataHub) the entity/relationship layer that
+# the measure glossary deliberately does not attempt — what things ARE, how
+# they join, and which physical dataset is the agreed source for each.
+
+version: 1
+domain: burundi_bizops
+verified: 2026-08-06
+
+# ---------------------------------------------------------------------------
+# SOURCE SYSTEMS — where facts are born. An entity's field can exist in
+# several systems at once with different values; "system_of_record" below
+# names the one that wins a dispute.
+# ---------------------------------------------------------------------------
+systems:
+  fineract:      {role: "Core lending (CLIF Credit). Loans, repayments, savings, OUs.", note: "Reversed-flag semantics are subtle — see measure notes."}
+  odoo:          {role: "Input quantities / credit upload target. >2M records per season; slow uploads are a known constraint."}
+  roster:        {role: "Legacy system of record; season closure and write-offs happen here until CLIF migration completes."}
+  kobo:          {role: "Field data collection: enrolment, distribution, claims, input-reco. District-sharded forms; version-control incidents documented (V1/V2/V3 forms, Jun 2026)."}
+  appsheet:      {role: "FO/FM mobile app on PostgreSQL (Burundi_AppSheet_DB_Prod) or Google Sheets backends. Being ramped down / re-architected (Jun 2026 memo)."}
+  sap:           {role: "Warehouse stock and movements (LOG). Reconciled against TMS and Kobo."}
+  tms:           {role: "Transport/logistics entries. TMS↔SAP variance workflow in Dataiku."}
+  payment_hub:   {role: "MM transaction gateway. Failed-transaction reconciliation vs Fineract is an open workstream (Jul 2026)."}
+  bancobu:       {role: "Bank. FO wallets, deposits, bank-vs-OAF reconciliation (FAS)."}
+  dataiku:       {role: "Analytics platform; where BizOps computes credit/repayment/claims. Projects: BURUNDI_BIZOPS (default), BURUNDI_BIZOPS_26B, BURUNDI_27A_ENROLMENT, BURUNDI_INPUT_RECONCILIATIONS, BURUNDI_BIZOPS_CDM (dashboards; outside current agent key scope)."}
+  superset:      {role: "Reporting layer being adopted in response to Dataiku licence limits (Elvis framework, Jul 2026)."}
+  google_sheets: {role: "FOps operational layer. Several sheets are de-facto golden sources for field KPIs — see golden_datasets."}
+
+# ---------------------------------------------------------------------------
+# ENTITIES
+# ---------------------------------------------------------------------------
+entities:
+
+  farmer:
+    description: >
+      A programme member. The central entity; almost every measure is
+      ultimately per-farmer-per-season.
+    keys:
+      account_number:
+        definition: "8-digit string. Fineract ACCOUNTNUMBER = AppSheet/Kobo AccountID."
+        caveats:
+          - "Cross-system equivalence is used operationally everywhere in the notes (invoices, claims, repayment) but has never been formally verified as 1:1; QC found 389 Kobo-captured accounts that exist in neither Fineract nor Roster (Jul 8)."
+          - "Duplicates are chronic: same name/different accounts (3.1K farmers, 56M BIF, 25B), same account/different names (9,544 flagged in 26B sync QC), farmers in multiple groups (30,194 in 27A prep)."
+          - "New farmers have NO account until CDM creates them: 'farmers without account numbers' is a standing category, and OAFID is null for all new enrolments."
+      client_id: {definition: "Fineract internal bigint; unique per roster row. Use for counting clients."}
+      oafid:     {definition: "Legacy OAF identifier. Empty in the client roster and null for new farmers — never count on it."}
+    lifecycle: "enrolled → ordered → (account created) → distributed-to → invoiced → repaying → [claims] → settled | underpaid → excluded/banned | written-off"
+    system_of_record: fineract
+    grain_warning: "A farmer-season can span multiple credit lines (26A: 1,836 multi-row accounts); aggregate to account before comparing credit vs repayment."
+
+  group:
+    description: >
+      Farmers organised under a Group Leader (GL). ~21,602 groups in 26B.
+      Unit of repayment mobilisation and GL-bonus payment.
+    keys: {group_id: {definition: "Fineract GROUPID. GROUP_NAME/GROUPCODE are labels, not keys."}}
+    caveats:
+      - "Kobo↔Fineract group mismatch is structural: 346 groups in Kobo not in Fineract (8,550 farmers), 222 the other way (6,574 farmers) — Jun 3 analysis."
+      - "Placeholder groups exist; transfers to valid groups are a recurring CDM workstream."
+    system_of_record: fineract
+
+  geography:
+    description: "Operational hierarchy. Region > District (~31 in 26B, 36 in 27A) > Site (~1,000–1,244) > Colline (1,000 in 26B) > Group."
+    caveats:
+      - "'Site' and 'colline' are used near-interchangeably in field docs; CLIF_site is the reconciliation key."
+      - "A separate government hierarchy (GOVTREGION/GOVTDISTRICT) exists on the client roster and does not match."
+      - "Each dataset spells district differently and values drift (62 distinct district strings in the 26A credit view)."
+      - "27A adds new districts (Isare, Cankuzo, Gisagara, Musongati, Rutana...) — season-over-season district comparisons must handle them."
+    related: {warehouse: "LOG node (17 warehouses incl. Temp*); linked to collines by delivery plan, wrong-warehouse assignments occur (Bweru→Ruyingi instead of Muramvya, Jul 2026)."}
+
+  season:
+    description: >
+      Two per year (A, B), labelled YYs. 4–5 live simultaneously at different
+      lifecycle stages. THE governing dimension: nearly every dataset, column
+      and KPI is season-specific.
+    lifecycle_gateways:  # authoritative table, CDM&CE sync May 25 2026
+      - "enrolment & order taking → members KPI confirmed by FD review"
+      - "distribution (rounds) → synchronisation vs Log deliveries → stock closure & returns"
+      - "invoicing (batches) → claims submission (deadline, contested) → claims correction (BK→RBM QC→upload)"
+      - "repayment collection (25/50/75/100% milestones) → underpayment report → prior-season overpayment offset"
+      - "input reconciliation (site variance, phone reco, field reco for high-variance sites)"
+      - "FO site-level sign-off → banning list → write-off proposal → leadership decision → closure in Roster → 'only one active season'"
+    caveats:
+      - "Figures move until closure: claims corrections changed 26A credit by +136M BIF; 'the figure last week' is a different basis."
+      - "Season allocation of transactions is itself contested: ~189.5M BIF of 26A money was collected during the 26B window (Aug 5); a mechanism to reallocate is an open dependency."
+
+  credit:
+    description: "What a farmer owes for a season: base credit + multiseason + CET."
+    composition: "total = credit_<season> + multiseason + CET  (verified exact on 26A dataset)"
+    perspectives:   # the SAME concept, five legitimate computations — do not mix
+      log:    "Value of what LOG delivered (Quantités Livrées Log)."
+      kpi:    "FOps field-reported KPI (Distribution KPI sheets)."
+      synch:  "Value synchronised into the system by FOs (tablet data entry)."
+      fo:     "FO self-calculated credit (paper) — known to run below KPI/System."
+      system: "Invoiced credit in Fineract/Odoo after claims corrections — BizOps basis."
+    dispute:
+      status: OPEN
+      evidence: "Aug 5 2026 26B table: Log 50.2488Bn / KPI 50.2489Bn / Synch 50.4876Bn; STDV 138M (0.2%). Multiseason & CET review can move totals ±1%. 26A: invoiced 50,663M vs FOPS estimate 51,165M (May 27)."
+      ruling: "FOps (Emmanuella, Aug 5): 'KPI and Synched data are the ones to be considered for now.' BizOps reports from the system/invoice basis. State the basis with every figure."
+
+  repayment:
+    description: "Money received against credit. Channels: mobile money (Lumitel/Enoti via Payment Hub/Bancobu), cash (bank slips, COOPEC), bank deposits."
+    perspectives:
+      kpi:    "FO-reported collection (Repayment KPI workbook)."
+      system: "Transactions landed in Fineract (after upload backlog: 2–8Bn typically in flight)."
+      bank:   "FAS bank-vs-OAF reconciliation — YTD gap 4.8Bn (FOPS KPI > bank, Jun 24); MM KPI vs bank revenue gap −2.37Bn (−9.69%, Jun 10)."
+    dispute:
+      status: OPEN
+      evidence: "26B total repaid: Emmanuella vs Ulrich calculations differ by ~400M BIF (~0.5% of rate), attributed to 26A-transactions-in-26B-window (Aug 5). Reversed-transaction semantics (Jul 15 analysis): reversed=TRUE is mostly internal Fineract migration (loan↔COCA savings), NOT cancelled money; naive filtering double-counts or drops; TREF junk transactions persist in reporting tables. The Jun 15 change (WHERE NOT is_reversed) removed ~1.5Bn from 26A MM figures — Global CDM requested it, Laban/Emmanuella flagged consequences."
+      ruling: "None yet. Ulrich's recommendation (Jul 15): develop ONE validated repayment dataset, BizOps QC before any share-out, document Fineract transaction lifecycle. That dataset does not exist yet — treat every repayment figure as basis-dependent."
+
+  invoice:
+    description: "Per-farmer statement of credit for a season (facture). Generated in batches (26A: 422 sites, then 578); distributed by email/AppSheet/paper (~30% of FOs lack email). The reference against which farmers raise claims."
+    caveats: ["~10K farmers missed batch generation in 26A (no group / manual paper additions); invoiced farmer count moved 477.5K→484K after OCR reintegration of 13K missing + removal of 6K duplicates."]
+
+  claim:
+    description: >
+      Farmer-raised correction request against invoice/credit/repayment.
+      12 bilingual issue types; three dominate (~87%): erreur intrants
+      (input quantity), missing amount, kurako/ongerako.
+    workflow: "FO submits (Kobo or AppSheet) → consolidation to one-row-per-claim → BK correction → RBM QC → upload to system → status visible in Dataiku dashboard (target: AppSheet)"
+    caveats:
+      - "Deadlines are contested and porous: 26A deadline 4 Jun → 11 Jun → forms reopened by FOps without BizOps alignment (Jul 29: 'claims submitted after the official deadline will not be processed'). Volume kept growing: 86K (May 20) → 107K → 123K → 152K → 163.5K (Jul 8)."
+      - "Claims ≠ underpayment: 40–46% of claimants have NO recorded underpayment."
+      - "26B claims SSOT is an OPEN dispute (Aug 5 follow-up table): 'Urgent need to lock in a single source of truth to accurately process 26B claims'; blockers include a 400M repayment discrepancy and multiseason changes."
+      - "1,063–1,074 claims carry invalid account numbers (mostly '0')."
+
+  underpayment:
+    description: "Per-farmer shortfall vs credit, reported gross (only short farmers) and after prior-season overpayment offset. Banded (<1K … 100K+); >50K = high-risk; drives banning/exclusion."
+    caveats:
+      - "Three bases in circulation: raw dataset, dashboard post-corrections, post-offset. 26A: 4.52–4.68Bn raw vs 778M dashboard."
+      - "FOs disputed pushed underpayment lists ('FO confirming the UP is not correct based on previous reports', Jun 3) — resolution via evidence-backed claims."
+      - "Farmer Exclusion Protocol is being drafted (Aug 5): exclusion list before 27A distribution; timing risk acknowledged."
+
+  distribution:
+    description: "Physical flow: FOMI/supplier reception → warehouse → transfer → colline stock point → farmer distribution → returns & drops → stock closure."
+    measures_note: "Delivered / distributed / returned / dropped are distinct; drop rates hit 57% (hoes) and 33–37% (phones) in 26B. Synchronisation % = value entered by FOs vs Log deliveries — it is data-entry progress, not physical progress."
+    reconciliations: ["SAP↔TMS (Dataiku webapp workflow)", "SAP↔Kobo accuracy 82% (26B, target rising as receipt-number typos fixed)", "monthly warehouse stock counts (EOM variance reports)"]
+
+  enrolment_order:
+    description: "Season entry: member registration + product order taking (KPI vs Target per product/district), contracts printed from AccountIDs."
+    caveats: ["611K members 27A 'confirmed in the KPI after FD review' — the KPI sheet, not the raw Kobo data, is the acknowledged number.", "Contract printing is blocked by AccountID availability (BizOps dependency, Aug 5)."]
+
+  input_reconciliation:
+    description: "Ordered/credited vs physically distributed, at site and farmer level (DPIB). Prioritised by variance value; phone reco → field reco for high-variance; below-threshold sites deprioritised; output feeds CI fraud queue and write-off decisions."
+    evidence: "25B: 89 field sites = 57.8% of ABS value; 138 phone sites = 49.5%; 517 deprioritised sites routed through 25B claims form."
+
+# ---------------------------------------------------------------------------
+# RELATIONSHIPS (join semantics an agent may use — with confidence)
+# ---------------------------------------------------------------------------
+relationships:
+  - {from: farmer, to: group,        via: "GROUPID on client roster",              confidence: high}
+  - {from: farmer, to: credit,       via: "AccountID on season credit views",      confidence: high, note: "per-account rollup first (multi-line farmers)"}
+  - {from: farmer, to: claim,        via: "account_id on claims repository",       confidence: medium, note: "5 nulls; 1K+ invalid accounts; format drift unverified"}
+  - {from: farmer, to: repayment,    via: "account/loan in Fineract transactions", confidence: medium, note: "reversed/TREF filtering required; savings included in combined view"}
+  - {from: credit, to: repayment,    via: "same-dataset columns only",             confidence: high, note: "NEVER divide across datasets — row populations differ"}
+  - {from: claim,  to: underpayment, via: "account_id join to underpayment ledger",confidence: medium, note: "documented analysis exists (claims-vs-UP bands)"}
+  - {from: distribution, to: credit, via: "quantity × price matrix",               confidence: medium, note: "unit ambiguity across products; price matrix per season"}
+  - {from: site, to: warehouse,      via: "delivery plan sheets",                  confidence: low, note: "assignment errors documented"}
+  - {from: kobo_group, to: fineract_group, via: "name matching",                   confidence: low, note: "346/222 mutual missing groups"}
+
+# ---------------------------------------------------------------------------
+# GOLDEN DATASETS — status: golden (agreed & evidenced) | candidate |
+# disputed | deprecated. Evidence = how the meeting notes treat it.
+# ---------------------------------------------------------------------------
+golden_datasets:
+
+  - name: "FOps Repayment workbook"
+    ref: "gsheet:1VRWk9og…"
+    covers: [repayment.kpi]
+    status: golden
+    evidence: "93 references across docs — the single most-cited artifact. Weekly submission/collection/district detail; quoted in every Systems meeting repayment section."
+    caveat: "Field-reported basis; known gaps vs bank (−9.69% MM) and vs system."
+
+  - name: "26B Distribution — Rapport de Synchronisation"
+    ref: "gsheet:1tdfWbW-…"
+    covers: [distribution.synchronisation]
+    status: golden
+    evidence: "61 references; the standing table (Log vs synchronised value) reproduced weekly in Systems notes."
+
+  - name: "26B Fiche de collecte des KPIs (SFD weekly)"
+    ref: "gsheet:15ag4YTt…"
+    covers: [field KPIs: GL attendance, member visits, 100% repayment by group/member, cash-in-hand, electronic pending]
+    status: golden
+    evidence: "60 references; the defined weekly field collection instrument with enumerated KPI list."
+    caveat: "Self-reported; minutes flag districts whose percentages 'do not correspond to reality'."
+
+  - name: "26A claims consolidated dashboard"
+    ref: "gsheet:1c3A8Odp… + dss:BURUNDI_BIZOPS:26A_claims_correction_with_status"
+    covers: [claim counts, claims-vs-underpayment, correction progress]
+    status: golden
+    evidence: "'The AppSheet and Kobo claims databases have now been consolidated into a single dashboard claims table with one row per claim' (May 27); progress % quoted from it in leadership meetings."
+
+  - name: "Crédit & Underpayment dashboards (25B, 26A)"
+    ref: "dss:BURUNDI_BIZOPS:rY10PA8_25B / dss:BURUNDI_BIZOPS_CDM:hG3RiLq_26A"
+    covers: [credit.system, underpayment (post-correction, post-offset)]
+    status: golden
+    evidence: "Headline numbers in every BizOps update are read from these."
+    caveat: "BURUNDI_BIZOPS_CDM is outside the current agent API-key scope; dashboard basis ≠ raw dataset basis."
+
+  - name: "KPIs Enregistrement 27A"
+    ref: "gsheet:1W7DduyX…"
+    covers: [enrolment.members, order vs target]
+    status: golden
+    evidence: "'611k members confirmed in the KPI after FD review' — FD review is the governance step; product target tables sourced from it."
+
+  - name: "27A Enregistrement — Rapport de Synchronisation"
+    ref: "gsheet:13Sujj1P…"
+    covers: [enrolment.synchronisation]
+    status: golden
+    evidence: "23 references; the tracker FDs are instructed to use."
+
+  - name: "V_FINERACT_COMBINED_TRANSACTIONS(_BI)"
+    ref: "Snowflake PRODUCTION.LOANS.…"
+    covers: [repayment.system raw]
+    status: disputed
+    evidence: "The system source — but Jul 15 analysis shows reversed-flag/TREF traps; Jun 15 filter change moved 1.5Bn; Ulrich formally recommends building ONE validated repayment dataset on top. Raw table is golden-source input, not a reporting surface."
+
+  - name: "26B credit comparison (Log/KPI/Synch)"
+    ref: "gsheet:1wltYpUY… + dss:BURUNDI_BIZOPS:Comparaison_Credit26B + dss:BURUNDI_BIZOPS_26B:26B_repayment_summary_by_account"
+    covers: [credit perspectives, 26B]
+    status: disputed
+    evidence: "Aug 5 three-way table with 0.2% spread; FOps ruling 'KPI and Synched to be considered for now' — explicitly provisional."
+
+  - name: "burundi_claims_repository (AppSheet PG)"
+    ref: "dss:BURUNDI_BIZOPS:burundi_claims_repository → public.burundi_bizops_fo_claims"
+    covers: [claim, 26A facture + 26B distribution campaigns]
+    status: candidate
+    evidence: "Normalised one-row-per-claim store (profiled 2026-08-06: 75,707 claims); but 26B claims SSOT is explicitly unresolved (Aug 5) and status column is submission-only."
+
+  - name: "26B delivery data cleaning / Total_Distributed_Report"
+    ref: "gsheet:1wltYpUY…"
+    covers: [distribution.log, SAP vs Kobo accuracy]
+    status: candidate
+    evidence: "LOG's item-level accuracy reporting surface (82% → improving); explicit tabs (Smart_Variances, Reconciliation_Output)."
+
+  - name: "26A_Credit_DistrRepaymentMultiS (DSS)"
+    ref: "dss:BURUNDI_BIZOPS:26A_Credit_DistrRepaymentMultiS"
+    covers: [credit+repayment per farmer, 26A]
+    status: candidate
+    evidence: "Profiled and verified in the measure glossary (grain trap documented); not itself cited in meetings — the dashboards built on it are."
+
+  - name: "27AENROLLMENT project"
+    ref: "dss:27AENROLLMENT"
+    status: deprecated
+    evidence: "Merged into BURUNDI_27A_ENROLMENT and archived (Jun 24, BC note) — duplicate project resolution."
+
+  - name: "AppSheet (as a data platform)"
+    status: deprecated
+    evidence: "'AppSheet ramp-down' decision doc (Jun 3); Google-Sheets backends kept only until successors land."

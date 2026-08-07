@@ -1,0 +1,118 @@
+# DataHub Business Glossary — Burundi BizOps
+# Ingest with the DataHub `datahub-business-glossary` source:
+#
+#   source:
+#     type: datahub-business-glossary
+#     config:
+#       file: ./datahub_glossary.yaml
+#       enable_auto_id: true
+#
+# Generated 2026-08-06 from semantic_model.yaml. Terms carry the dispute
+# status in custom_properties so DataHub users see contested definitions.
+
+version: "1"
+source: DataHub
+owners:
+  users:
+    - barth.cabouat
+nodes:
+  - name: Burundi BizOps
+    description: One Acre Fund Burundi business operations domain. Season-based lending of agricultural inputs to smallholder farmers.
+    nodes:
+
+      - name: Parties
+        description: Who the programme serves and who runs it.
+        terms:
+          - name: Farmer
+            description: >
+              Programme member. Keyed by 8-digit account number
+              (Fineract ACCOUNTNUMBER = field AccountID); CLIENT_ID for roster
+              counting; OAFID is unreliable (empty/null). Duplicate accounts and
+              farmers-without-accounts are chronic, actively managed data issues.
+            term_source: EXTERNAL
+            custom_properties: {status: agreed, key: account_number, system_of_record: fineract}
+          - name: Group
+            description: Farmers organised under a Group Leader (GL). ~21.6K groups (26B). Key is Fineract GROUPID; names are not unique. Kobo↔Fineract group alignment is imperfect (hundreds of mutually missing groups).
+            custom_properties: {status: agreed, key: group_id, system_of_record: fineract}
+          - name: Field hierarchy
+            description: "GL → FO (Field Officer) → FM (Field Manager) → FD (Field Director) → SFD (Senior Field Director), in FOps. BizOps teams: CDM (client data), CE (collections), CI (case investigations), CC (hotline); BK (bookkeeper) and RBM handle data entry and QC."
+            custom_properties: {status: agreed}
+          - name: Geography
+            description: "Region > District > Site > Colline > Group (operational); separate non-matching government hierarchy. District spellings drift across datasets; new 27A districts break season comparisons."
+            custom_properties: {status: agreed_with_caveats}
+
+      - name: Season lifecycle
+        description: Everything is season-scoped (24A…27B). 4–5 seasons live at once.
+        terms:
+          - name: Season
+            description: Half-year programme cycle labelled YY+A/B. Governs dataset naming, column naming, and which figures may move (open seasons) vs are frozen (closed).
+            custom_properties: {status: agreed}
+          - name: Season gateway
+            description: "Ordered closure steps: enrolment → distribution & synchronisation → invoicing → claims → repayment milestones (25/50/75/100%) → underpayment & offsets → input reconciliation → FO sign-off → banning list → write-off → Roster closure. Authoritative table: CDM&CE sync 2026-05-25."
+            custom_properties: {status: agreed}
+          - name: Synchronisation
+            description: FO tablet data entry of distribution/enrolment into the system, tracked as % of Log-delivered value. It measures DATA capture progress, not physical delivery.
+            custom_properties: {status: agreed}
+          - name: Season allocation
+            description: Assignment of a transaction to the season it repays. Contested at boundaries — ~190M BIF of 26A money arrived in the 26B window (Aug 2026); reallocation mechanism is an open dependency.
+            custom_properties: {status: open_issue}
+
+      - name: Money
+        description: Credit, repayment, and their reconciliation.
+        terms:
+          - name: Credit
+            description: "What a farmer owes for a season = base credit + multiseason + CET. FIVE legitimate computation bases exist (Log / KPI / Synch / FO self-calc / System-invoice) that differ by ~0.2% at season level. FOps ruling (2026-08-05): KPI and Synch 'to be considered for now'. Always state the basis."
+            custom_properties: {status: disputed, bases: "log|kpi|synch|fo|system", ruling: "FOps: KPI+Synch provisional"}
+          - name: CET
+            description: Per-farmer charge on top of season credit (~13% of total). "Credit" unqualified means credit INCLUDING CET.
+            custom_properties: {status: agreed}
+          - name: Multiseason
+            description: Credit component for multi-season products (solar, phones, cookstoves). Carries own column; farmers holding it cannot abandon mid-term.
+            custom_properties: {status: agreed}
+          - name: Repayment
+            description: "Money received against credit via mobile money, cash/bank slips, COOPEC. THREE bases: FO-reported KPI, system (Fineract, lags by the upload backlog), bank (FAS reconciliation). Known gaps: MM KPI vs bank −9.69%; 26B totals differ ~400M BIF between analysts. No single validated repayment dataset exists yet — building one is a formal recommendation (2026-07-15)."
+            custom_properties: {status: disputed, bases: "kpi|system|bank"}
+          - name: Reversed transaction
+            description: "Fineract reversed=TRUE mostly marks internal account migration (loan↔COCA savings), NOT cancelled money; TREF-prefixed junk persists in reporting tables. Naive filtering double-counts or silently drops ~1.5Bn BIF. Filter change of 2026-06-15 (WHERE NOT is_reversed) makes before/after figures incomparable."
+            custom_properties: {status: agreed_with_caveats}
+          - name: Underpayment
+            description: Per-farmer shortfall vs credit, gross (short farmers only). Reported raw, post-claims-correction, and post-offset of prior-season overpayments — three different numbers. >50K BIF = high-risk band.
+            custom_properties: {status: agreed_with_caveats, bases: "raw|corrected|offset"}
+          - name: Overpayment
+            description: Payment beyond credit; credited as prepayment; offset against next season's underpayment.
+            custom_properties: {status: agreed}
+          - name: RvR
+            description: Revenue vs Repayment reconciliation (Collections/FAS). Distinct from repayment rate.
+            custom_properties: {status: agreed}
+
+      - name: Claims
+        description: Farmer-raised corrections.
+        terms:
+          - name: Claim
+            description: "Correction request vs invoice/credit/repayment. 12 bilingual issue types; erreur intrants + missing amount + kurako/ongerako ≈ 87%. Workflow: FO submit (Kobo/AppSheet) → consolidate one-row-per-claim → BK correct → RBM QC → system upload. 40–46% of claimants have no recorded underpayment."
+            custom_properties: {status: agreed}
+          - name: Claims deadline
+            description: Officially fixed per season but repeatedly extended/reopened (26A - 4 Jun → 11 Jun → reopened); post-deadline claims declared non-processable (2026-07-29). Treat claim counts as time-stamped.
+            custom_properties: {status: open_issue}
+          - name: Kurako Ongerako
+            description: Two-sided repayment reallocation (deduct from one account, add to another). One claim row carries both accounts.
+            custom_properties: {status: agreed}
+          - name: Erreur intrants
+            description: Input-quantity error claim; corrections flow into credit recalculation (moved 26A credit by −480M then +136M BIF). Suspicious-claim triage (auto-accept vs manual review vs physical contract check) documented 2026-06-24.
+            custom_properties: {status: agreed}
+
+      - name: Physical flow
+        description: Inputs from supplier to farmer.
+        terms:
+          - name: Distribution
+            description: Reception → warehouse → transfer → colline stock point → farmer. Delivered ≠ distributed ≠ returned ≠ dropped; drop rates reached 57% (hoes). Reconciled SAP↔TMS↔Kobo; monthly warehouse stock counts.
+            custom_properties: {status: agreed}
+          - name: Drop
+            description: Ordered item refused/abandoned before distribution (late delivery, market price). 26B drops ~4Bn BIF absolute.
+            custom_properties: {status: agreed}
+          - name: Input reconciliation
+            description: Ordered/credited vs distributed (DPIB) at site/farmer level; variance-prioritised (field reco → phone reco → deprioritised-via-claims); feeds CI fraud queue and write-offs.
+            custom_properties: {status: agreed}
+          - name: Enrolment
+            description: Member registration + order taking. Governance step - FD review of the KPI sheet; the reviewed KPI number (not raw Kobo) is the acknowledged enrolment figure.
+            custom_properties: {status: agreed}

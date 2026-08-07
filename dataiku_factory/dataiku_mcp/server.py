@@ -36,6 +36,8 @@ from dataiku_mcp.tools import sql_execution
 from dataiku_mcp.tools import discussions
 from dataiku_mcp.tools import dataset_sql
 from dataiku_mcp.tools import context as context_tools
+from dataiku_mcp.tools import llm_cost
+from dataiku_mcp.tools import agents as agent_tools
 
 # Register Orientation Tools
 @mcp.tool()
@@ -793,6 +795,234 @@ def get_connections(
         Dict containing connection information
     """
     return environment_config.get_connections(project_key, scope, include_usage)
+
+# Register Agent Tools (read-only: no agent configuration is mutated here)
+@mcp.tool()
+def list_agents(project_key: str) -> Dict[str, Any]:
+    """
+    List DSS-managed agents in a project.
+
+    Returns each agent's id, name, type (TOOLS_USING_AGENT, STRUCTURED_AGENT,
+    PYTHON_AGENT, ...), active version and available versions. Call this before
+    any other agent tool -- the others need an agent_id and cannot discover one.
+
+    Args:
+        project_key: The project key
+
+    Returns:
+        Dict containing agent ids, names, types and active versions
+    """
+    return agent_tools.list_agents(project_key)
+
+@mcp.tool()
+def list_agent_tools(
+    project_key: str,
+    include_shared: bool = False,
+) -> Dict[str, Any]:
+    """
+    List agent tools defined in a project.
+
+    Args:
+        project_key: The project key
+        include_shared: Also include tools shared from other projects
+
+    Returns:
+        Dict containing tool ids, types and names
+    """
+    return agent_tools.list_agent_tools(project_key, include_shared)
+
+@mcp.tool()
+def list_llm_connections(
+    project_key: str,
+    purpose: str = "GENERIC_COMPLETION",
+) -> Dict[str, Any]:
+    """
+    List LLM Mesh connections usable from a project.
+
+    Use this to find a valid llm_id for get_llm_call_cost, or to see which
+    models are available before comparing their cost.
+
+    Args:
+        project_key: The project key
+        purpose: One of GENERIC_COMPLETION (default),
+            TEXT_EMBEDDING_EXTRACTION, IMAGE_GENERATION
+
+    Returns:
+        Dict containing the available LLM ids and descriptions
+    """
+    return agent_tools.list_llm_connections(project_key, purpose)
+
+@mcp.tool()
+def get_agent_config(
+    project_key: str,
+    agent_id: str,
+    version_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Read an agent's configuration: system prompt, LLM, attached tools, and
+    for structured agents its block graph (routing clauses and transitions).
+
+    Read-only -- this never modifies the agent.
+
+    Args:
+        project_key: The project key
+        agent_id: The agent id (see list_agents)
+        version_id: Agent version; defaults to the active version
+
+    Returns:
+        Dict containing the agent's resolved configuration
+    """
+    return agent_tools.get_agent_config(project_key, agent_id, version_id)
+
+@mcp.tool()
+def get_agent_tool_config(
+    project_key: str,
+    tool_id: str,
+    include_descriptor: bool = False,
+) -> Dict[str, Any]:
+    """
+    Read an agent tool's configuration, with credentials masked.
+
+    For MCP-client tools this shows which MCP server is wired in: command,
+    args, environment, subtool enable/disable state and timeouts. Useful for
+    answering "which tools can this agent actually call?".
+
+    Args:
+        project_key: The project key
+        tool_id: The tool id (see list_agent_tools)
+        include_descriptor: Also return every subtool's full description and
+            input schema. Off by default -- very large for a big MCP server.
+
+    Returns:
+        Dict containing the redacted tool configuration
+    """
+    return agent_tools.get_agent_tool_config(project_key, tool_id, include_descriptor)
+
+@mcp.tool()
+def get_agent_status(
+    project_key: str,
+    agent_id: str,
+    version_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Get the running state of an agent's kernels.
+
+    Reports how many instances are up and their request counters (active,
+    successful, failed, cancelled) -- the quickest check for whether an agent
+    is serving and whether it has been erroring.
+
+    Args:
+        project_key: The project key
+        agent_id: The agent id
+        version_id: Agent version; defaults to the active version
+
+    Returns:
+        Dict containing kernel status and aggregate request counters
+    """
+    return agent_tools.get_agent_status(project_key, agent_id, version_id)
+
+@mcp.tool()
+def test_agent_prompt(
+    project_key: str,
+    agent_id: str,
+    message: str,
+    include_raw_trace: bool = False,
+) -> Dict[str, Any]:
+    """
+    Send a test prompt to an agent and return its answer with a cost breakdown.
+
+    Runs the agent for real: it will call its tools and incur real LLM spend.
+    The returned trace summary lists each iteration, which tools were invoked,
+    and the tokens and cost of each LLM call.
+
+    Args:
+        project_key: The project key
+        agent_id: The agent id (see list_agents)
+        message: The prompt to send
+        include_raw_trace: Also return the full nested trace JSON. Off by
+            default -- very large, and rarely needed given the summary.
+
+    Returns:
+        Dict containing the agent's reply, a step-by-step trace summary and
+        total cost
+    """
+    return agent_tools.test_agent_prompt(project_key, agent_id, message, include_raw_trace)
+
+@mcp.tool()
+def get_agent_run_cost(
+    project_key: str,
+    agent_id: str,
+    message: str,
+) -> Dict[str, Any]:
+    """
+    Measure what one agent turn costs, broken down per iteration.
+
+    Same execution path as test_agent_prompt but returns only the cost view.
+    Use when comparing models or measuring the price of a prompt change.
+
+    Runs the agent for real; the cost reported was genuinely spent.
+
+    Args:
+        project_key: The project key
+        agent_id: The agent id
+        message: The prompt to send
+
+    Returns:
+        Dict containing per-call and total token/cost figures
+    """
+    return agent_tools.get_agent_run_cost(project_key, agent_id, message)
+
+@mcp.tool()
+def get_llm_cost_quotas() -> Dict[str, Any]:
+    """
+    Read LLM Mesh cost quotas: limits, spend to date and blocking status.
+
+    Requires an admin DSS API key. If the configured key is not an admin key,
+    this reports that plainly rather than implying no quotas are configured.
+
+    Returns:
+        Dict containing the cost-limiting counters
+    """
+    return agent_tools.get_llm_cost_quotas()
+
+# Register LLM Mesh Cost Tools
+@mcp.tool()
+def get_llm_call_cost(
+    project_key: str,
+    llm_id: str,
+    message: str,
+    max_tokens: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Run a single prompt against an LLM Mesh connection and report its token
+    usage and estimated USD cost.
+
+    Cost data comes straight from the LLM Mesh's own trace, at the point
+    where the call is actually billed -- this is the same number Cost
+    Control / LLM Cost Guard quotas are metered against, not a separate
+    estimate.
+
+    Important scope note: this reports the cost of the ONE prompt passed in
+    here. It has no visibility into any other agent's conversation, and it
+    cannot report "the cost of the response you're generating right now",
+    because that number does not exist yet while a model is still producing
+    output -- there is no way for an in-flight turn to know its own final
+    cost before it finishes. Use this tool for cost lookups, estimates, and
+    auditing of a specific prompt/model pair, not as a live meter bolted
+    onto another agent's own answer.
+
+    Args:
+        project_key: The project key
+        llm_id: LLM Mesh identifier to query, e.g.
+            "bedrock:aws-bedrock:anthropic.claude-sonnet-4-6" (see
+            get_connections or the project's LLM connections for valid ids)
+        message: The prompt text to send
+        max_tokens: Optional cap on generated tokens (maxOutputTokens)
+
+    Returns:
+        Dict containing the response text and usage/cost totals
+    """
+    return llm_cost.get_llm_call_cost(project_key, llm_id, message, max_tokens)
 
 # Register Monitoring and Debug Tools
 @mcp.tool()
