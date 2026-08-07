@@ -26,6 +26,29 @@ _AGENT_SETTINGS_KEY = {
 _REDACTED = "***HIDDEN***"
 
 
+def _agents_api(project_key: str, path: str = "") -> Any:
+    """
+    GET an ``/agents`` endpoint directly.
+
+    The dataikuapi convenience wrappers for agents (``DSSProject.list_agents``,
+    ``get_agent`` and friends) only exist from client 14.7, but the REST
+    endpoints they wrap exist on any DSS 14 instance. Reading over REST keeps
+    these tools working whatever client version the MCP's venv happens to hold
+    -- a mismatch that has already produced ``'DSSProject' object has no
+    attribute 'list_agents'`` at call time from a server that imported cleanly.
+
+    Paths mirror the 14.7.3 client source exactly:
+      ""                      -> list agents
+      "/<id>"                 -> agent settings (raw)
+      "/<id>/status"          -> kernel status
+      "/tools?..."            -> list agent tools
+      "/tools/<id>"           -> tool settings (raw)
+      "/tools/<id>/descriptor"-> tool descriptor
+    """
+    client = get_client()
+    return client._perform_json("GET", "/projects/%s/agents%s" % (project_key, path))
+
+
 def _redact(value: Any, key_hint: str = "") -> Any:
     """
     Recursively mask credentials in a settings structure.
@@ -68,15 +91,17 @@ def list_agents(project_key: str) -> Dict[str, Any]:
         Dict containing agent ids, names, types and active versions
     """
     try:
-        project = get_project(project_key)
         agents = []
-        for item in project.list_agents():
-            entry = {"id": item.id, "name": item.name}
+        for item in _agents_api(project_key):
+            agent_id = item_get(item, "id")
+            entry = {"id": agent_id, "name": item_get(item, "name")}
             try:
-                settings = project.get_agent(item.id).get_settings()
-                entry["type"] = settings.type
-                entry["active_version"] = settings.active_version
-                entry["versions"] = settings.get_version_ids()
+                raw = _agents_api(project_key, "/%s" % agent_id)
+                entry["type"] = raw.get("type")
+                entry["active_version"] = raw.get("activeVersion")
+                entry["versions"] = [
+                    v.get("versionId") for v in raw.get("versions", []) or []
+                ]
             except Exception as e:
                 entry["settings_error"] = str(e)
             agents.append(entry)
@@ -106,7 +131,9 @@ def list_agent_tools(
         Dict containing tool ids, types and names
     """
     try:
-        project = get_project(project_key)
+        query = "/tools?includeDescriptions=false"
+        if include_shared:
+            query += "&includeShared=true"
         tools = [
             {
                 "id": item_get(t, "id"),
@@ -114,7 +141,7 @@ def list_agent_tools(
                 "name": item_get(t, "name"),
                 "project_key": item_get(t, "projectKey"),
             }
-            for t in project.list_agent_tools(include_shared=include_shared)
+            for t in _agents_api(project_key, query)
         ]
         return {
             "status": "ok",
@@ -178,20 +205,28 @@ def get_agent_config(
         Dict containing the agent's resolved configuration
     """
     try:
-        project = get_project(project_key)
-        agent = project.get_agent(agent_id)
-        settings = agent.get_settings()
-        agent_type = settings.type
+        settings_raw = _agents_api(project_key, "/%s" % agent_id)
+        agent_type = settings_raw.get("type")
+        versions = settings_raw.get("versions", []) or []
 
-        resolved_version = version_id or settings.active_version
+        resolved_version = version_id or settings_raw.get("activeVersion")
         if resolved_version is None:
             return {
                 "status": "error",
                 "message": f"Agent '{agent_id}' has no active version; pass version_id explicitly.",
             }
 
-        version_settings = settings.get_version_settings(resolved_version)
-        raw = version_settings.get_raw()
+        raw = next(
+            (v for v in versions if v.get("versionId") == resolved_version), None
+        )
+        if raw is None:
+            return {
+                "status": "error",
+                "message": (
+                    f"Version '{resolved_version}' not found on agent '{agent_id}'. "
+                    f"Available: {[v.get('versionId') for v in versions]}"
+                ),
+            }
         config_key = _AGENT_SETTINGS_KEY.get(agent_type)
         config = raw.get(config_key) if config_key else None
 
@@ -201,8 +236,8 @@ def get_agent_config(
             "agent_id": agent_id,
             "agent_type": agent_type,
             "version_id": resolved_version,
-            "available_versions": settings.get_version_ids(),
-            "active_version": settings.active_version,
+            "available_versions": [v.get("versionId") for v in versions],
+            "active_version": settings_raw.get("activeVersion"),
         }
 
         if config is None:
@@ -291,9 +326,7 @@ def get_agent_tool_config(
         Dict containing the redacted tool configuration
     """
     try:
-        project = get_project(project_key)
-        tool = project.get_agent_tool(tool_id)
-        raw = tool.get_settings().get_raw()
+        raw = _agents_api(project_key, "/tools/%s" % tool_id)
 
         params = raw.get("params", {}) or {}
         result: Dict[str, Any] = {
@@ -320,26 +353,20 @@ def get_agent_tool_config(
             ),
         }
 
-        if include_descriptor:
-            try:
-                descriptor = tool.get_descriptor()
+        try:
+            descriptor = _agents_api(project_key, "/tools/%s/descriptor" % tool_id)
+            subtools = descriptor.get("subtools", []) if isinstance(descriptor, dict) else []
+            result["subtool_count"] = len(subtools)
+            if include_descriptor:
                 result["descriptor"] = descriptor
-                subtools = descriptor.get("subtools", []) if isinstance(descriptor, dict) else []
-                result["subtool_count"] = len(subtools)
-            except Exception as e:
-                result["descriptor_error"] = str(e)
-        else:
-            try:
-                descriptor = tool.get_descriptor()
-                subtools = descriptor.get("subtools", []) if isinstance(descriptor, dict) else []
+            else:
                 result["subtool_names"] = [s.get("name") for s in subtools if isinstance(s, dict)]
-                result["subtool_count"] = len(subtools)
                 result["descriptor_note"] = (
                     "Subtool names only. Pass include_descriptor=true for full "
                     "descriptions and input schemas (large)."
                 )
-            except Exception as e:
-                result["descriptor_error"] = str(e)
+        except Exception as e:
+            result["descriptor_error"] = str(e)
 
         return result
 
@@ -364,9 +391,10 @@ def get_agent_status(project_key: str, agent_id: str, version_id: Optional[str] 
         Dict containing kernel status and aggregate request counters
     """
     try:
-        project = get_project(project_key)
-        agent = project.get_agent(agent_id)
-        status = agent.status(version_id) if version_id else agent.status()
+        path = "/%s/status" % agent_id
+        if version_id:
+            path += "?versionId=%s" % version_id
+        status = _agents_api(project_key, path)
 
         kernels = status.get("kernels", []) or []
         totals = {
@@ -537,9 +565,11 @@ def test_agent_prompt(
     """
     try:
         project = get_project(project_key)
-        agent = project.get_agent(agent_id)
+        # Equivalent to DSSAgent.as_llm() in the 14.7 client, but get_llm exists
+        # on every LLM Mesh-era client, so this does not require >=14.7.
+        llm = project.get_llm("agent:%s" % agent_id)
 
-        response = agent.as_llm().new_completion().with_message(message).execute()
+        response = llm.new_completion().with_message(message).execute()
 
         result: Dict[str, Any] = {
             "status": "ok" if response.success else "error",
@@ -588,8 +618,8 @@ def get_agent_run_cost(
     """
     try:
         project = get_project(project_key)
-        agent = project.get_agent(agent_id)
-        response = agent.as_llm().new_completion().with_message(message).execute()
+        llm = project.get_llm("agent:%s" % agent_id)
+        response = llm.new_completion().with_message(message).execute()
 
         trace = getattr(response, "trace", None)
         if not trace:
