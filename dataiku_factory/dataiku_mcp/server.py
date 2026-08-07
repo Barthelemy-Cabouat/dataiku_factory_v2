@@ -6,6 +6,7 @@ from mcp.server.fastmcp import FastMCP
 from typing import Any, Dict, List, Optional
 import json
 import logging
+import os
 import sys
 
 from dataiku_mcp.client import get_client, get_project
@@ -1934,6 +1935,72 @@ def get_project_info(project_key: str) -> str:
     except Exception as e:
         return json.dumps({"error": str(e)})
 
+# ---------------------------------------------------------------------------
+# Server-side toolset gating
+# ---------------------------------------------------------------------------
+# DSS's per-tool subtoolsStateOverride does NOT gate what a structured agent's
+# CORE_LOOP can call: on 2026-08-07 an agent whose tool config had
+# delete_dataset explicitly disabled called it anyway and deleted a real
+# dataset. Config-level gating is advisory. The only gate an agent runtime
+# cannot bypass is the server never registering the tool, which is what this
+# does: DATAIKU_MCP_TOOLSET=readonly in the tool's env keeps only the
+# allowlist below. Run two tool configs off the same install - one readonly
+# for consumer agents, one full for contributors - and the gate travels with
+# the process, not with any client's interpretation of a config flag.
+
+READONLY_TOOLSET = {
+    # orientation & glossary
+    "list_projects", "list_concepts", "lookup_concept",
+    # datasets (read + safe aggregate)
+    "inspect_dataset_schema", "resolve_dataset_sql_location",
+    "aggregate_dataset", "check_dataset_metrics", "get_dataset_sample",
+    # project exploration
+    "search_project_objects", "get_project_flow", "get_project_variables",
+    "get_connections", "get_code_environments", "export_project_config",
+    # jobs & monitoring
+    "get_recent_runs", "get_job_details", "get_job_activities", "get_job_log",
+    # recipes & scenarios (read)
+    "get_recipe_code", "validate_recipe_syntax", "test_recipe_dry_run",
+    "get_scenario_steps", "get_scenario_logs",
+    # notebooks (read)
+    "list_jupyter_notebooks", "get_jupyter_notebook",
+    "get_jupyter_notebook_outputs", "list_sql_notebooks", "get_sql_notebook",
+    # wiki, discussions, zones (read)
+    "list_wiki_articles", "get_wiki_article",
+    "list_object_discussions", "get_object_discussion",
+    "list_zones", "get_zone_of_object",
+    # agent observability (reads only; test_agent_prompt and
+    # get_agent_run_cost spend real money and are excluded)
+    "list_agents", "list_agent_tools", "list_llm_connections",
+    "get_agent_config", "get_agent_tool_config", "get_agent_status",
+    "get_llm_cost_quotas", "get_llm_call_cost",
+}
+
+
+def _apply_toolset_gate() -> None:
+    mode = os.environ.get("DATAIKU_MCP_TOOLSET", "full").strip().lower()
+    if mode != "readonly":
+        return
+    try:
+        registry = mcp._tool_manager._tools  # mcp 1.x internal, stable across 1.x
+        removed = [name for name in list(registry) if name not in READONLY_TOOLSET]
+        for name in removed:
+            del registry[name]
+        logging.getLogger(__name__).info(
+            "DATAIKU_MCP_TOOLSET=readonly: serving %d tools, removed %d",
+            len(registry), len(removed),
+        )
+    except AttributeError:
+        # Fail CLOSED: a gate that silently serves everything is worse than a
+        # server that refuses to start.
+        raise RuntimeError(
+            "DATAIKU_MCP_TOOLSET=readonly was requested but the tool registry "
+            "could not be accessed on this mcp package version. Refusing to "
+            "start with the full toolset."
+        )
+
+
 def create_server():
     """Create and configure the MCP server."""
+    _apply_toolset_gate()
     return mcp

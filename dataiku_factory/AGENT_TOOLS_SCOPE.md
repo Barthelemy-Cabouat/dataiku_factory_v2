@@ -14,9 +14,17 @@ worked, not what the docs claim.
 (`llm_cost.py`). All read-only.
 
 **Write tools (§3) deliberately not built.** Decision: the agent-facing MCP does
-not get configuration-mutation tools. If they are added later for operator use,
-disable them for the agent via `subtoolsStateOverride` on the tool config —
-`get_agent_tool_config` surfaces that state under `subtools.explicitly_disabled`.
+not get configuration-mutation tools.
+
+> **Correction (2026-08-07): `subtoolsStateOverride` does NOT gate agents.**
+> A structured agent whose tool config had `delete_dataset: false` in
+> `subtoolsStateOverride` called it anyway and deleted a real dataset
+> (recovered — `drop_data` defaulted false and the definition was rebuilt
+> from the live table). The override is advisory at best on 14.7. The only
+> reliable gate is server-side: `DATAIKU_MCP_TOOLSET=readonly` in the tool's
+> env makes the server register only the read-only allowlist (`READONLY_TOOLSET`
+> in `server.py`), and it fails closed if the registry cannot be accessed.
+> Consumer agents get a readonly tool config; contributors get a full one.
 
 ## Verified constraints (read before implementing)
 
