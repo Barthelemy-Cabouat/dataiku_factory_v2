@@ -19,3 +19,17 @@ Always add `dataiku_factory` to `sys.path` before importing project modules:
 ```python
 sys.path.insert(0, 'dataiku_factory')
 ```
+
+## Deployed agents
+
+Agent and MCP-tool IDs, the consumer graph, and the invariants that are easy to
+relearn the hard way live in `dataiku_factory/DEPLOYED_AGENTS.md`. Read it
+before touching anything in DSS project `DATAIKU_MAINTENANCE`.
+
+Two that bite immediately:
+
+- `subtool_count` on the MCP tool is the only reliable signal of which toolset
+  is live (`minimal` = 14, `readonly` = 43, `full` = 83). Env vars, installed
+  commit and token counts have each been misleading.
+- `DATAIKU_MCP_TOOLSET` goes on the **tool's** env list, not the project
+  variables — the latter never reaches `os.environ`.
