@@ -300,6 +300,28 @@ Every one of these was hit during the build.
 | Code changes do not take effect | Image rebuilt, host venv untouched | Run the code env update; verify with `mcp_env_diagnostic` |
 | `relation "X" does not exist` | SQL built from the DSS dataset name | Use `resolve_dataset_sql_location`; `aggregate_dataset` does it for you |
 | Glossary empty but package imports | `context/*.md` not shipped | `[tool.setuptools.package-data]` in `pyproject.toml` |
+| `ValidationException: toolSpec.name … length less than or equal to 64` (Bedrock) | MCP tool's **name** is too long: DSS exposes each subtool as `<sanitised name>_<hash>__<subtool>` | Rename the tool. Budget: **name ≤ 24 chars** for the full toolset, **≤ 26** for readonly (see below) |
+
+### Naming a Local MCP tool
+
+Bedrock rejects any tool name over 64 characters, and DSS builds the exposed
+name by prefixing every subtool with the sanitised tool name plus a 6-char
+hash — 10 characters of overhead beyond the name itself. Non-alphanumerics
+become underscores, so `Dataiku MCP (contributor, full)` becomes a 41-character
+prefix and blows the budget on the eight longest subtools.
+
+```
+len(tool_name) + 10 + len(longest_subtool) <= 64
+```
+
+Longest subtool is `clear_jupyter_notebook_outputs` (30) in the full set and
+`get_jupyter_notebook_outputs` (28) in the readonly set, giving **24** and
+**26** characters respectively. `Dataiku MCP full` and `Dataiku MCP RO` both
+fit with room to spare.
+
+The failure is silent until an agent actually runs: DSS saves the tool, loads
+its descriptor and lists the subtools happily. Only the model provider rejects
+it, so the error surfaces as a failed *chat*, not a failed configuration.
 
 ---
 
