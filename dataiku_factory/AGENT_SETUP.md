@@ -331,6 +331,7 @@ Every one of these was hit during the build.
 | Code changes do not take effect | Image rebuilt, host venv untouched | Run the code env update; verify with `mcp_env_diagnostic` |
 | `relation "X" does not exist` | SQL built from the DSS dataset name | Use `resolve_dataset_sql_location`; `aggregate_dataset` does it for you |
 | Glossary empty but package imports | `context/*.md` not shipped | `[tool.setuptools.package-data]` in `pyproject.toml` |
+| Toolset gate has no effect; descriptor lists every tool | Server launched by a path that skips the gate | Fixed by applying the gate at import time. On older builds, launch via `dataiku_mcp.cli:main` rather than `from dataiku_mcp.server import mcp; mcp.run()` |
 | `ValidationException: toolSpec.name … length less than or equal to 64` (Bedrock) | MCP tool's **name** is too long: DSS exposes each subtool as `<sanitised name>_<hash>__<subtool>` | Rename the tool. Budget: **name ≤ 24 chars** for the full toolset, **≤ 26** for readonly (see below) |
 
 ### Naming a Local MCP tool

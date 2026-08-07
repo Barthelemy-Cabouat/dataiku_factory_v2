@@ -2071,7 +2071,14 @@ _TOOLSETS = {
 }
 
 
+_GATE_APPLIED = False
+
+
 def _apply_toolset_gate() -> None:
+    global _GATE_APPLIED
+    if _GATE_APPLIED:
+        return
+    _GATE_APPLIED = True
     mode = os.environ.get("DATAIKU_MCP_TOOLSET", "full").strip().lower()
     if mode == "full":
         return
@@ -2112,12 +2119,25 @@ def _apply_toolset_gate() -> None:
 
 def create_server():
     """Create and configure the MCP server."""
-    # Always announce the build, gated or not -- "which commit is running?" was
-    # the question that cost the most time on this project.
-    logging.getLogger(__name__).info(
-        "dataiku-mcp starting: commit=%s toolset=%s",
-        (_REVISION or "unknown")[:12],
-        os.environ.get("DATAIKU_MCP_TOOLSET", "full"),
-    )
-    _apply_toolset_gate()
+    _apply_toolset_gate()  # no-op if import-time application already ran
     return mcp
+
+
+# Apply the gate at IMPORT time, not only from create_server().
+#
+# The DSS Local MCP tool config launches this server with
+#     python -c "from dataiku_mcp.server import mcp; mcp.run()"
+# which never calls create_server(). The gate therefore never ran in DSS: the
+# descriptor enumerated all 83 tools while the env var said "minimal", and the
+# only thing actually restricting the agent was DSS's own subtoolsStateOverride
+# -- the config-level mechanism we know does not hold.
+#
+# A gate that depends on the caller choosing the right entrypoint is not a
+# gate. Applying it here means every import path -- console script, `-c`
+# one-liner, direct import from a notebook -- gets the same toolset.
+logging.getLogger(__name__).info(
+    "dataiku-mcp loaded: commit=%s toolset=%s",
+    (_REVISION or "unknown")[:12],
+    os.environ.get("DATAIKU_MCP_TOOLSET", "full"),
+)
+_apply_toolset_gate()
