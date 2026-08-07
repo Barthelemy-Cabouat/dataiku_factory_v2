@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from dataiku_mcp.client import get_client, get_project
 from dataiku_mcp.tools.api_helpers import is_sensitive_name, item_get
-from dataiku_mcp.tools.llm_cost import _is_billed_span
+from dataiku_mcp.tools.llm_cost import _is_billed_span, _has_real_usage
 
 # Agent type -> the version-settings sub-dict that actually holds its config.
 # The dataikuapi convenience properties (e.g. DSSAgentVersionSettings.tools)
@@ -416,8 +416,10 @@ def _flatten_trace(node: Any, steps: List[Dict[str, Any]], depth: int = 0) -> No
         return
 
     name = node.get("name")
-    usage = node.get("usageMetadata") if isinstance(node.get("usageMetadata"), dict) else None
-    billed = _is_billed_span(name)
+    # Only real consumption counts: the outer wrapper span on an agent turn
+    # carries an empty usageMetadata and must not be reported as an LLM call.
+    usage = node.get("usageMetadata") if _has_real_usage(node.get("usageMetadata")) else None
+    billed = _is_billed_span(name) and usage is not None
 
     if name in _INTERESTING_SPANS or billed:
         attributes = node.get("attributes", {}) or {}

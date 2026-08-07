@@ -27,6 +27,25 @@ def _is_billed_span(name: Any) -> bool:
     return not (name.endswith("_FIRST_CHUNK") or name.endswith("_STREAM_COMPLETE"))
 
 
+def _has_real_usage(usage: Any) -> bool:
+    """
+    True only if a usageMetadata dict actually reports consumption.
+
+    On an agent turn the *outer* DKU_LLM_MESH_LLM_CALL span carries an empty
+    ``usageMetadata: {}`` -- it wraps the billed inner calls rather than being
+    one itself. Treating it as a call inflated "3 LLM calls" for a turn that
+    made 2. Cost was unaffected (it sums to zero) but the count was wrong.
+    """
+    if not isinstance(usage, dict):
+        return False
+    return bool(
+        usage.get("totalTokens")
+        or usage.get("promptTokens")
+        or usage.get("completionTokens")
+        or usage.get("estimatedCost")
+    )
+
+
 def _collect_llm_call_usage(node: Any, calls: List[Dict[str, Any]]) -> None:
     """
     Walk a Dataiku LLM Mesh trace tree and collect usage/cost metadata.
@@ -39,7 +58,7 @@ def _collect_llm_call_usage(node: Any, calls: List[Dict[str, Any]]) -> None:
     if not isinstance(node, dict):
         return
 
-    if _is_billed_span(node.get("name")) and isinstance(node.get("usageMetadata"), dict):
+    if _is_billed_span(node.get("name")) and _has_real_usage(node.get("usageMetadata")):
         usage = node["usageMetadata"]
         attributes = node.get("attributes", {}) or {}
         calls.append({
