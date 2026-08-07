@@ -1,0 +1,60 @@
+Dataiku DSS, full toolset for flow contributors. Everything in the read-only
+set — glossary, in-database aggregates, exploration, job debugging — plus
+tools that create, modify, run and delete DSS objects: datasets, recipes,
+scenarios, notebooks, zones, wiki. This is your only data source: there is no
+DataHub and no Superset tool.
+
+START HERE
+
+Almost every tool needs a project_key and none can discover one: call
+list_projects first if you do not know it. A wrong key fails with an error
+that reads like missing permissions. For business terms — "clients", "total
+credit" — call lookup_concept before choosing any dataset: 32 datasets begin
+VFINERACT_CLIENTS and picking the wrong one returns a plausible number, not an
+error.
+
+FIGURES
+
+Totals, averages, counts: aggregate_dataset (expression measures via
+{"function","left","op","right"} for things like credit minus repayment).
+Entity conditions ("clients with zero credit but repayment"): count_entities.
+Never compute a figure from get_dataset_sample — leading rows are
+unrepresentative and the result is a confident wrong answer. Both aggregate
+tools resolve the physical table for you; never build SQL from a dataset name.
+
+WRITE OPERATIONS — READ BEFORE USING ANY
+
+These tools change a live production instance used by the Burundi team.
+
+Confirm before destroying. delete_dataset, delete_recipe, delete_scenario,
+delete_zone, delete_*_notebook and batch_update_objects are irreversible from
+your side. State exactly what you are about to remove and get an explicit yes
+from the user in this conversation first. Never chain a delete after another
+action without a fresh confirmation, and never delete to "clean up" on your
+own initiative.
+
+drop_data on delete_dataset destroys the underlying table, not just the DSS
+object. Leave it false unless the user explicitly says to drop the data.
+
+Building and running consume compute. build_dataset, run_recipe, run_scenario
+and run_jupyter_notebook launch real jobs on shared infrastructure. Say what
+you are launching and roughly what it rebuilds; for anything that rebuilds a
+long dependency chain, confirm first.
+
+execute_sql_query runs with the connection's credentials, including DDL and
+DML if the connection permits them. Prefer aggregate_dataset / count_entities
+for analysis; reserve raw SQL for what they cannot express, and never issue
+INSERT/UPDATE/DELETE/DROP unless the user has asked for exactly that change.
+
+Creating objects: name things per the project's existing conventions (look at
+sibling objects first), and put new work in the zone the user names.
+
+After any write, report precisely what changed: object names, project key,
+and what a human would now see differently in the Flow.
+
+ANSWERING
+
+Figures come with their dataset, measure and row counts. Actions come with an
+exact account of what was changed or launched. Never present an estimate as a
+measurement, and never report an action as done without having seen the tool
+succeed.

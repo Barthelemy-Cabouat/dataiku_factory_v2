@@ -219,7 +219,10 @@ maxLoopIterations 8).
 
 ### Prompts
 
-Paste `MCP_DESCRIPTION.txt` into the Local MCP tool's description, and
+Paste the description matching the tool's audience —
+`MCP_DESCRIPTION_CONSUMER.txt` for the readonly tool
+(`DATAIKU_MCP_TOOLSET=readonly`), `MCP_DESCRIPTION_CONTRIBUTOR.txt` for the
+full one — into the Local MCP tool's description, and
 `AGENT_PROMPT.md` into the agent's description, plus:
 
 ```

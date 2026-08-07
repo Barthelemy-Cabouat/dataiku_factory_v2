@@ -98,11 +98,14 @@ and let the tooling resolve it.
 Keep one concept per entry. If a phrase has two legitimate meanings, write two
 entries and say in each how it differs from the other.
 
-Say when a measure needs SQL. `aggregate_dataset` takes plain column names
-only, so any measure that is an expression — `SUM(a - b)`, a filter comparing
-two columns — has to go through `execute_sql_query`. Underpayment and
-overpayment are both like this. An entry whose `measure` line cannot be pasted
-into `aggregate_dataset` must say so, or the agent will try and fail.
+Say how a measure is computed when it is not a plain column aggregate.
+`aggregate_dataset` now takes expression measures — underpayment is
+`{"function": "SUM", "left": "credit_col", "op": "-", "right": "repay_col"}` —
+and entity-level conditions ("clients with repayment but zero credit") go
+through `count_entities`. Raw `execute_sql_query` is only for what neither can
+express, and consumer agents do not have it. An entry whose measure needs the
+expression form or `count_entities` should spell out the exact arguments, or
+the agent will paste the measure line into `aggregate_dataset` and fail.
 
 Name the season. Nearly every dataset here is one season wide, with the season
 in the dataset name, the column name or the project key. An entry that does not
