@@ -33,9 +33,43 @@ Notes and deliberate limitations
 
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, List, Optional
 
 from dataiku_mcp.client import get_client, get_project
+
+
+def _connection_allowlist() -> Optional[set]:
+    """
+    Parse DATAIKU_MCP_SQL_CONNECTIONS into a set of permitted connections.
+
+    When set, ad-hoc SQL may only run against these connections. Point them at
+    database credentials that are themselves read-only and the database becomes
+    the enforcement layer -- the one place an agent cannot reach around, unlike
+    tool-config flags (see AGENT_TOOLS_SCOPE.md for how that lesson was
+    learned). Unset means no restriction, preserving existing behaviour.
+    """
+    raw = os.environ.get("DATAIKU_MCP_SQL_CONNECTIONS", "").strip()
+    if not raw:
+        return None
+    return {c.strip() for c in raw.split(",") if c.strip()}
+
+
+def _connection_denied(connection: str) -> Optional[Dict[str, Any]]:
+    allowed = _connection_allowlist()
+    if allowed is None or connection in allowed:
+        return None
+    return {
+        "status": "error",
+        "connection": connection,
+        "message": (
+            f"Connection '{connection}' is not permitted for ad-hoc SQL on this "
+            f"server (DATAIKU_MCP_SQL_CONNECTIONS). Permitted: "
+            f"{', '.join(sorted(allowed))}. These are read-only analytical "
+            "connections; use aggregate_dataset or count_entities for datasets "
+            "on other connections."
+        ),
+    }
 
 
 # Notebook language -> /sql/queries/ query type
@@ -185,6 +219,9 @@ def execute_sql_query(
 ) -> Dict[str, Any]:
     """Run a single ad-hoc SQL statement on a DSS connection and return rows."""
     try:
+        denied = _connection_denied(connection)
+        if denied:
+            return denied
         sql = _strip_trailing_semicolon(query)
         if not _is_runnable(sql):
             return {"status": "error", "message": "query is empty or contains only comments"}
@@ -232,6 +269,9 @@ def execute_sql_notebook(
                     "pass connection explicitly"
                 ),
             }
+        denied = _connection_denied(conn)
+        if denied:
+            return denied
 
         language = (content.get("language") or "SQL").upper()
         query_type = _LANGUAGE_TO_QUERY_TYPE.get(language)

@@ -406,6 +406,42 @@ def aggregate_dataset(
     )
 
 @mcp.tool()
+def count_entities(
+    project_key: str,
+    dataset_name: str,
+    entity_column: str,
+    conditions: List[Dict[str, Any]],
+    where: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Count entities whose aggregated values meet conditions.
+
+    The tool for "how many X where <aggregate condition>": clients whose total
+    credit is zero but repayment positive, accounts with more than N orders,
+    districts whose average is below a threshold. Computes a GROUP BY / HAVING
+    in the database over all rows -- do not attempt this with samples or by
+    fetching grouped rows.
+
+    Args:
+        project_key: The project key
+        dataset_name: Name of the dataset (DSS name; table resolved automatically)
+        entity_column: Column identifying the entity to count (e.g. AccountID)
+        conditions: List of {"function", "column", "op", "value"} combined with
+            AND. Functions: COUNT, COUNT_DISTINCT, SUM, AVG, MIN, MAX, STDDEV.
+            Ops: = != <> < <= > >=. Example: clients with repayment but zero
+            credit -> [{"function": "SUM", "column": "Total_Credit_CET",
+            "op": "=", "value": 0}, {"function": "MAX", "column":
+            "Repayment26A", "op": ">", "value": 0}]
+        where: Optional raw SQL row filter applied before grouping
+
+    Returns:
+        Dict with entity_count and the SQL that produced it
+    """
+    return dataset_sql.count_entities(
+        project_key, dataset_name, entity_column, conditions, where
+    )
+
+@mcp.tool()
 def check_dataset_metrics(
     project_key: str,
     dataset_name: str
@@ -1951,9 +1987,10 @@ def get_project_info(project_key: str) -> str:
 READONLY_TOOLSET = {
     # orientation & glossary
     "list_projects", "list_concepts", "lookup_concept",
-    # datasets (read + safe aggregate)
+    # datasets (read + safe aggregates)
     "inspect_dataset_schema", "resolve_dataset_sql_location",
-    "aggregate_dataset", "check_dataset_metrics", "get_dataset_sample",
+    "aggregate_dataset", "count_entities", "check_dataset_metrics",
+    "get_dataset_sample",
     # project exploration
     "search_project_objects", "get_project_flow", "get_project_variables",
     "get_connections", "get_code_environments", "export_project_config",
@@ -1981,9 +2018,17 @@ def _apply_toolset_gate() -> None:
     mode = os.environ.get("DATAIKU_MCP_TOOLSET", "full").strip().lower()
     if mode != "readonly":
         return
+    allowed = set(READONLY_TOOLSET)
+    # With a connection allowlist in force, ad-hoc SQL is admissible even in
+    # readonly mode: sql_execution refuses any connection outside
+    # DATAIKU_MCP_SQL_CONNECTIONS, and those connections are expected to carry
+    # read-only database credentials -- enforcement at the database, the one
+    # layer an agent cannot reach around.
+    if os.environ.get("DATAIKU_MCP_SQL_CONNECTIONS", "").strip():
+        allowed.add("execute_sql_query")
     try:
         registry = mcp._tool_manager._tools  # mcp 1.x internal, stable across 1.x
-        removed = [name for name in list(registry) if name not in READONLY_TOOLSET]
+        removed = [name for name in list(registry) if name not in allowed]
         for name in removed:
             del registry[name]
         logging.getLogger(__name__).info(

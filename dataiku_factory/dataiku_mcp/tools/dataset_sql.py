@@ -235,6 +235,23 @@ def resolve_dataset_sql_location(
         }
 
 
+# Comparison operators allowed in entity-level conditions, and the arithmetic
+# allowed inside expression measures. Anything else is rejected, not passed on.
+_ALLOWED_COMPARE_OPS = {"=", "!=", "<>", "<", "<=", ">", ">="}
+_ALLOWED_ARITH_OPS = {"+", "-", "*"}
+
+
+def _sql_literal(value: Any) -> Optional[str]:
+    """Render a condition value as a SQL literal, or None if unrenderable."""
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, (int, float)):
+        return repr(value)
+    if isinstance(value, str):
+        return "'" + value.replace("'", "''") + "'"
+    return None
+
+
 def _normalise_aggregations(
     aggregations: List[Any],
     valid_columns: Dict[str, str],
@@ -242,8 +259,13 @@ def _normalise_aggregations(
     """
     Validate requested aggregations against the dataset schema.
 
-    Accepts either a dict ``{"function": "SUM", "column": "x", "alias": "y"}``
-    or the shorthand string ``"SUM(x)"``. Returns (specs, errors).
+    Accepts a dict ``{"function": "SUM", "column": "x", "alias": "y"}``, the
+    shorthand string ``"SUM(x)"``, or an expression measure
+    ``{"function": "SUM", "left": "a", "op": "-", "right": "b", "alias": "y"}``
+    where both columns are schema-validated and ``op`` is one of ``+ - *``.
+    Expression measures exist because figures like underpayment are
+    ``SUM(credit - repayment)`` -- previously only reachable through raw SQL.
+    Returns (specs, errors).
     """
     specs: List[Dict[str, str]] = []
     errors: List[str] = []
@@ -252,6 +274,36 @@ def _normalise_aggregations(
         function: Optional[str] = None
         column: Optional[str] = None
         alias: Optional[str] = None
+
+        if isinstance(item, dict) and "left" in item:
+            function = str(item.get("function", "")).strip().upper()
+            left, op, right = item.get("left"), str(item.get("op", "")).strip(), item.get("right")
+            alias = item.get("alias")
+            if function not in _ALLOWED_AGGREGATES:
+                errors.append(
+                    f"Aggregate function '{function}' is not allowed. "
+                    f"Supported: {', '.join(sorted(_ALLOWED_AGGREGATES))}."
+                )
+                continue
+            if op not in _ALLOWED_ARITH_OPS:
+                errors.append(
+                    f"Expression operator '{op}' is not allowed. Supported: + - *"
+                )
+                continue
+            bad = [c for c in (left, right) if c not in valid_columns]
+            if bad:
+                errors.append(
+                    f"Expression column(s) {bad} do not exist in the dataset. "
+                    f"Available: {', '.join(sorted(valid_columns))}."
+                )
+                continue
+            specs.append({
+                "function": function,
+                "column": left,           # non-null accounting uses the left column
+                "expression": (left, op, right),
+                "alias": alias or f"{function.lower()}_{left}_{op if op != '*' else 'x'}_{right}",
+            })
+            continue
 
         if isinstance(item, dict):
             function = str(item.get("function", "")).strip().upper()
@@ -420,6 +472,10 @@ def aggregate_dataset(
         for spec in specs:
             if spec["column"] == "*":
                 expr = "COUNT(*)"
+            elif "expression" in spec:
+                left, op, right = spec["expression"]
+                inner = f"{_quote_ident(left, style)} {op} {_quote_ident(right, style)}"
+                expr = _ALLOWED_AGGREGATES[spec["function"]].format(col=inner)
             else:
                 expr = _ALLOWED_AGGREGATES[spec["function"]].format(
                     col=_quote_ident(spec["column"], style)
@@ -459,4 +515,132 @@ def aggregate_dataset(
             "status": "error",
             "dataset_name": dataset_name,
             "message": f"Failed to aggregate dataset '{dataset_name}': {e}",
+        }
+
+
+def count_entities(
+    project_key: str,
+    dataset_name: str,
+    entity_column: str,
+    conditions: List[Dict[str, Any]],
+    where: Optional[str] = None,
+    max_rows: int = 10,
+) -> Dict[str, Any]:
+    """
+    Count entities whose aggregated values satisfy conditions.
+
+    Answers the "how many X where <aggregate condition>" class of question --
+    e.g. clients whose total credit is zero but whose repayment is positive --
+    which needs a GROUP BY / HAVING subquery that aggregate_dataset cannot
+    express and that previously forced raw SQL.
+
+    Every condition is structural: aggregate functions from the same allowlist
+    as aggregate_dataset, columns validated against the dataset schema,
+    operators from a fixed set, values rendered as typed literals. Nothing the
+    caller sends is spliced into SQL as text except the optional ``where``.
+
+    Args:
+        project_key: The project key
+        dataset_name: Name of the dataset (DSS name; table resolved automatically)
+        entity_column: The column identifying the entity to count (e.g. AccountID)
+        conditions: List of {"function", "column", "op", "value"}; op is one of
+            = != <> < <= > >=. All conditions must hold (AND). COALESCE to 0 is
+            applied to SUM/MAX/MIN/AVG so null-heavy columns compare sanely.
+        where: Optional raw SQL row filter applied before grouping
+        max_rows: Cap on returned rows (result is a single count row)
+
+    Returns:
+        Dict with entity_count and the SQL that produced it
+    """
+    try:
+        location = resolve_dataset_sql_location(project_key, dataset_name)
+        if location.get("status") == "error":
+            return location
+        if not location.get("is_sql"):
+            return {
+                "status": "error",
+                "dataset_name": dataset_name,
+                "message": location.get("note")
+                or f"Dataset '{dataset_name}' is not backed by a SQL table.",
+            }
+        connection = location.get("connection")
+        if not connection:
+            return {
+                "status": "error",
+                "message": f"Dataset '{dataset_name}' has no connection recorded.",
+            }
+
+        project = get_project(project_key)
+        schema_columns = (project.get_dataset(dataset_name).get_schema() or {}).get("columns", [])
+        valid_columns = {c.get("name"): c.get("type") for c in schema_columns if c.get("name")}
+
+        if entity_column not in valid_columns:
+            return {
+                "status": "error",
+                "message": (
+                    f"entity_column '{entity_column}' does not exist. "
+                    f"Available: {', '.join(sorted(valid_columns))}."
+                ),
+            }
+        if not conditions:
+            return {"status": "error", "message": "conditions must contain at least one entry."}
+
+        style = _quote_style(location.get("dataset_type"))
+        having: List[str] = []
+        for i, cond in enumerate(conditions):
+            if not isinstance(cond, dict):
+                return {"status": "error", "message": f"conditions[{i}] must be a dict."}
+            fn = str(cond.get("function", "")).strip().upper()
+            col = cond.get("column")
+            op = str(cond.get("op", "")).strip()
+            lit = _sql_literal(cond.get("value"))
+            if fn not in _ALLOWED_AGGREGATES:
+                return {"status": "error", "message":
+                        f"conditions[{i}]: function '{fn}' not allowed. "
+                        f"Supported: {', '.join(sorted(_ALLOWED_AGGREGATES))}."}
+            if col not in valid_columns:
+                return {"status": "error", "message":
+                        f"conditions[{i}]: column '{col}' does not exist in the dataset."}
+            if op not in _ALLOWED_COMPARE_OPS:
+                return {"status": "error", "message":
+                        f"conditions[{i}]: operator '{op}' not allowed. "
+                        f"Supported: {' '.join(sorted(_ALLOWED_COMPARE_OPS))}."}
+            if lit is None:
+                return {"status": "error", "message":
+                        f"conditions[{i}]: value must be a number, string or boolean."}
+            agg = _ALLOWED_AGGREGATES[fn].format(col=_quote_ident(col, style))
+            if fn in ("SUM", "MAX", "MIN", "AVG"):
+                agg = f"COALESCE({agg}, 0)"
+            having.append(f"{agg} {op} {lit}")
+
+        ent = _quote_ident(entity_column, style)
+        sql = (
+            f"SELECT COUNT(*) AS {_quote_ident('entity_count', style)} FROM (\n"
+            f"  SELECT {ent}\n  FROM {location['sql_from']}\n"
+        )
+        if where:
+            sql += f"  WHERE {where}\n"
+        sql += f"  GROUP BY {ent}\n  HAVING {' AND '.join(having)}\n) dss_entities"
+
+        result = _execute(sql, connection, "sql", project_key, max_rows)
+        count = result["rows"][0][0] if result["rows"] else None
+        return {
+            "status": "ok",
+            "project_key": project_key,
+            "dataset_name": dataset_name,
+            "entity_column": entity_column,
+            "entity_count": count,
+            "connection": connection,
+            "sql": sql,
+            "computed_over": "all rows (in-database GROUP BY/HAVING, not a sample)",
+            "note": (
+                "Entities counted at the grain of entity_column. Rows where the "
+                "entity is NULL group together; say so if material."
+            ),
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "dataset_name": dataset_name,
+            "message": f"Failed to count entities in '{dataset_name}': {e}",
         }
