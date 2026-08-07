@@ -113,7 +113,10 @@ def list_agents(project_key: str) -> Dict[str, Any]:
             "agent_count": len(agents),
         }
     except Exception as e:
-        return {"status": "error", "message": f"Failed to list agents: {e}"}
+        # The "[rest]" marker identifies this code revision in error output.
+        # Its absence from a live error proves the serving process is running
+        # some other install of this package, not this file.
+        return {"status": "error", "message": f"Failed to list agents [rest]: {e}"}
 
 
 def list_agent_tools(
